@@ -38,6 +38,14 @@ export interface RendererPublicAPI {
    */
   setFocusAnchor(point: { x: number; y: number } | null): void
 
+  /**
+   * Abort an in-flight launch sequence and reset all related state. Safe
+   * to call from anywhere — no-op if no launch is active. Used by error
+   * paths in the chat landing when the backend call fails mid-launch so
+   * the void doesn't get stuck in tunnel mode forever.
+   */
+  abortLaunch(): void
+
   /** Discrete trigger: a brief warp-style camera lurch. */
   warp(): void
 

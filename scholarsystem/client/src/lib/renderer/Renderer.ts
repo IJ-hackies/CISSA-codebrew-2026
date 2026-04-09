@@ -119,6 +119,12 @@ export class GalaxyRenderer implements RendererPublicAPI {
   private vp = { x: 0, y: 0 }
   /** Spiral state — radius, angle, angular speed. */
   private spiral = { radius: 0, angle: 0, angularSpeed: 0 }
+  /**
+   * Tunnel intensity — drives star streaks + inward acceleration. Owned
+   * by the launch sequence only. Independent of `parallaxBoost` so the
+   * history overlay's `zoomOut()` doesn't accidentally warp the void.
+   */
+  private tunnel = { intensity: 0 }
   /** Wall-clock seconds when phase 2 (cruise) began. Used for min-hold. */
   private cruiseStartedAt = 0
   private rocketParticles: {
@@ -231,6 +237,22 @@ export class GalaxyRenderer implements RendererPublicAPI {
     })
   }
 
+  abortLaunch(): void {
+    gsap.killTweensOf([this.vp, this.spiral, this.rocket, this.tunnel])
+    this.rocket.active = false
+    this.rocket.alpha = 1
+    this.rocket.scale = 1
+    this.rocket.flame = 0
+    this.rocket.bloom = 0
+    this.spiral.radius = 0
+    this.spiral.angle = 0
+    this.spiral.angularSpeed = 0
+    this.tunnel.intensity = 0
+    this.camera.shakeX = 0
+    this.camera.shakeY = 0
+    this.phase = 'idle'
+  }
+
   warp(): void {
     gsap.to(this.camera, {
       parallaxBoost: 2.4,
@@ -295,7 +317,7 @@ export class GalaxyRenderer implements RendererPublicAPI {
       const angularP2 = (Math.PI * 2) / 2.0 // ~2s/rev = ~3.14 rad/s
 
       // Kill any prior tweens on these targets.
-      gsap.killTweensOf([this.vp, this.spiral, this.rocket, this.camera])
+      gsap.killTweensOf([this.vp, this.spiral, this.rocket, this.tunnel])
 
       const tl = gsap.timeline({
         onComplete: () => {
@@ -310,7 +332,7 @@ export class GalaxyRenderer implements RendererPublicAPI {
         { x: centerX, y: centerY, duration: 0.4, ease: 'power2.inOut' },
         0,
       )
-      tl.to(this.camera, { parallaxBoost: 1.5, duration: 0.4, ease: 'power2.out' }, 0)
+      tl.to(this.tunnel, { intensity: 0.5, duration: 0.4, ease: 'power2.out' }, 0)
       tl.to(this.rocket, { flame: 0.6, bloom: 50, duration: 0.4, ease: 'power2.out' }, 0)
 
       // ── Phase 1: entry spiral (1100ms) ──────────────────────────────────
@@ -324,16 +346,15 @@ export class GalaxyRenderer implements RendererPublicAPI {
         { scale: 1.4, flame: 1, bloom: 110, duration: 1.1, ease: 'power2.out' },
         0.4,
       )
-      tl.to(this.camera, { parallaxBoost: 4.0, duration: 1.1, ease: 'power2.in' }, 0.4)
+      tl.to(this.tunnel, { intensity: 3.0, duration: 1.1, ease: 'power2.in' }, 0.4)
 
       // ── Phase 2 entry: ease the angular speed down to steady-state ──────
-      // (Runs in the first 0.4s after phase 1 ends.)
       tl.to(
         this.spiral,
         { angularSpeed: angularP2, duration: 0.6, ease: 'power2.inOut' },
         1.5,
       )
-      tl.to(this.camera, { parallaxBoost: 4.5, duration: 0.6, ease: 'sine.inOut' }, 1.5)
+      tl.to(this.tunnel, { intensity: 3.5, duration: 0.6, ease: 'sine.inOut' }, 1.5)
     })
   }
 
@@ -378,11 +399,11 @@ export class GalaxyRenderer implements RendererPublicAPI {
       { scale: 0.2, flame: 0.4, bloom: 30, duration: 0.7, ease: 'power2.in' },
       0,
     )
-    tl.to(this.camera, { parallaxBoost: 3.2, duration: 0.7, ease: 'sine.inOut' }, 0)
+    tl.to(this.tunnel, { intensity: 2.2, duration: 0.7, ease: 'sine.inOut' }, 0)
 
     // ── Phase 3b: fade (600ms) ────────────────────────────────────────────
     tl.to(this.rocket, { alpha: 0, flame: 0, bloom: 0, duration: 0.6, ease: 'power2.in' }, 0.7)
-    tl.to(this.camera, { parallaxBoost: 1, duration: 0.6, ease: 'power2.out' }, 0.7)
+    tl.to(this.tunnel, { intensity: 0, duration: 0.6, ease: 'power2.out' }, 0.7)
   }
 
   getPhase(): RendererPhase {
@@ -528,13 +549,12 @@ export class GalaxyRenderer implements RendererPublicAPI {
       s.twinklePhase += dt * s.twinkleSpeed
     }
 
-    // ── Tunnel star motion (driven by parallaxBoost) ─────────────────────
-    // When parallaxBoost > ~1.05, stars accelerate inward toward the
-    // vanishing point. Inward speed scales with the boost. Stars that
-    // reach the vanishing point wrap to the far edge in the same direction.
-    const boostExcess = Math.max(0, this.camera.parallaxBoost - 1)
-    if (boostExcess > 0.05) {
-      const speed = boostExcess * 380 // px/sec at boost = 2; 1140 at boost = 4
+    // ── Tunnel star motion (driven by tunnel.intensity) ──────────────────
+    // Owned exclusively by the launch sequence — history overlay's
+    // zoomOut/zoomIn no longer touch this.
+    const tInt = this.tunnel.intensity
+    if (tInt > 0.05) {
+      const speed = tInt * 380 // px/sec at intensity = 2; ~1330 at peak ≈ 3.5
       const wrapDist = Math.hypot(this.width, this.height) * 0.55
       for (const s of this.stars) {
         const baseX = s.x * this.width
@@ -689,12 +709,12 @@ export class GalaxyRenderer implements RendererPublicAPI {
     }
 
     // 3. Stars — drawn at base position (+ camera drift + tunnel offset).
-    //    During tunnel mode (parallaxBoost > 1), stars elongate into radial
+    //    During launch (tunnel.intensity > 0), stars elongate into radial
     //    streaks pointing away from the vanishing point.
     const focusBoost = this.focusIntensity
-    const tunnelExcess = Math.max(0, this.camera.parallaxBoost - 1)
-    const tunnelActive = tunnelExcess > 0.05
-    const streakStrength = Math.min(1, tunnelExcess / 3.5)
+    const tInt = this.tunnel.intensity
+    const tunnelActive = tInt > 0.05
+    const streakStrength = Math.min(1, tInt / 3.5)
 
     for (const s of this.stars) {
       const sx = s.x * w + camX + s.tunnelOffsetX

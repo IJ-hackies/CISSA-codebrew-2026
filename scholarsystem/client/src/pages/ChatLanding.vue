@@ -216,22 +216,37 @@ async function handleSubmit(origin: { x: number; y: number }) {
       new Promise((r) => setTimeout(r, MIN_CRUISE_MS)),
     ])
 
+    console.log('[chat-landing] pipeline returned galaxy:', galaxy)
+
     if (renderer) {
       await renderer.landRocket()
     }
 
     const entry: GalaxyEntry = {
-      uuid: galaxy.meta.id,
-      title: galaxy.meta.title,
+      uuid: galaxy?.meta?.id,
+      title: galaxy?.meta?.title,
       createdAt: Date.now(),
+    }
+    console.log('[chat-landing] navigating to', `/galaxy/${entry.uuid}`)
+    if (!entry.uuid) {
+      throw new Error(
+        `Backend returned galaxy without meta.id (got: ${JSON.stringify(galaxy?.meta)})`,
+      )
     }
     addRecentGalaxy(entry)
     recents.value = listRecentGalaxies()
-    router.push(`/galaxy/${entry.uuid}`)
+    const navResult = router.push(`/galaxy/${entry.uuid}`)
+    navResult
+      .then((failure) => {
+        if (failure) console.warn('[chat-landing] router.push reported:', failure)
+      })
+      .catch((e) => console.error('[chat-landing] router.push threw:', e))
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error('[chat-landing] launch failed:', message)
     launchError.value = `Launch failed: ${message}`
+    // Reset the renderer so the void doesn't stay stuck in tunnel mode.
+    renderer?.abortLaunch()
     launching.value = false
   }
 }
