@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "bun --watch run src/index.ts",
     "start": "bun run src/index.ts",
-    "test:spawner": "bun run src/scripts/test-spawner.ts"
+    "test:spawner": "bun run src/scripts/test-spawner.ts",
+    "test:pipeline": "bun run src/scripts/test-pipeline.ts"
   },
   "dependencies": {
     "hono": "^4.6.0",
