@@ -1,4 +1,18 @@
 terminals.bat
-scholarsystem/node_modules/
-scholarsystem/server/node_modules/
-scholarsystem/shared/node_modules/
+
+# OS
+.DS_Store
+**/.DS_Store
+Thumbs.db
+
+# Node / Bun
+node_modules/
+**/node_modules/
+*.log
+.vite/
+dist/
+dist-ssr/
+*.local
+.env
+.env.*
+!.env.example
