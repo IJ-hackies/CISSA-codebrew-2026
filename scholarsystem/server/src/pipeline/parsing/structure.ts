@@ -5,17 +5,11 @@
 // stage — as soon as it lands, the layout engine can run (Stage 4) and the
 // frontend can render a usable map even with no detail/narrative/visuals.
 
-import { z } from "zod";
 import { Galaxy, Knowledge, Relationships } from "../../../../shared/types";
 import { runClaude } from "../../lib/spawner";
-import { extractJson, stageStart, stageDone, stageError } from "../../lib/blob";
+import { stageStart, stageDone, stageError } from "../../lib/blob";
 import { buildStructurePrompt } from "../../prompts/parsing/structure";
-
-// Wrapper matching what the Stage 1 prompt is instructed to output.
-const StructureResponse = z.object({
-  knowledge: Knowledge,
-  relationships: Relationships,
-});
+import { parseStructureLines } from "./parseStructureLines";
 
 export interface RunStructureOptions {
   /**
@@ -47,27 +41,7 @@ export async function runStructure(
     // all we have. The test-pipeline script uses runStructureFromText to
     // pass the full text without losing it to the 500-char excerpt.
     const res = await runClaude({ prompt });
-
-    if (!res.ok) {
-      throw new Error(
-        `claude exited ${res.exitCode}: ${res.stderr || "(no stderr)"}`,
-      );
-    }
-
-    const parsed = StructureResponse.parse(extractJson(res.output));
-
-    if (opts.validateRefs !== false) {
-      assertReferentialIntegrity(parsed.knowledge, parsed.relationships);
-    }
-
-    galaxy.knowledge = parsed.knowledge;
-    galaxy.relationships = parsed.relationships;
-    // Title the galaxy from the knowledge summary if ingest derived a
-    // placeholder — knowledge.title is usually more descriptive.
-    if (parsed.knowledge.title && parsed.knowledge.title.length > 0) {
-      galaxy.meta.title = parsed.knowledge.title;
-    }
-
+    applyStructureResponse(galaxy, res.ok, res.exitCode, res.stderr, res.output, opts);
     stageDone(galaxy, "structure");
     return galaxy;
   } catch (err) {
@@ -91,31 +65,59 @@ export async function runStructureFromText(
   try {
     const prompt = buildStructurePrompt(fullText);
     const res = await runClaude({ prompt });
-
-    if (!res.ok) {
-      throw new Error(
-        `claude exited ${res.exitCode}: ${res.stderr || "(no stderr)"}`,
-      );
-    }
-
-    const parsed = StructureResponse.parse(extractJson(res.output));
-
-    if (opts.validateRefs !== false) {
-      assertReferentialIntegrity(parsed.knowledge, parsed.relationships);
-    }
-
-    galaxy.knowledge = parsed.knowledge;
-    galaxy.relationships = parsed.relationships;
-    if (parsed.knowledge.title && parsed.knowledge.title.length > 0) {
-      galaxy.meta.title = parsed.knowledge.title;
-    }
-
+    applyStructureResponse(galaxy, res.ok, res.exitCode, res.stderr, res.output, opts);
     stageDone(galaxy, "structure");
     return galaxy;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     stageError(galaxy, "structure", message);
     throw err;
+  }
+}
+
+/**
+ * Shared tail of both runStructure variants: validate the spawner result,
+ * parse Claude's line-based output, Zod-validate the assembled objects,
+ * run referential integrity, and write into the galaxy blob.
+ */
+function applyStructureResponse(
+  galaxy: Galaxy,
+  ok: boolean,
+  exitCode: number,
+  stderr: string,
+  output: string,
+  opts: RunStructureOptions,
+): void {
+  if (!ok) {
+    throw new Error(`claude exited ${exitCode}: ${stderr || "(no stderr)"}`);
+  }
+
+  const { knowledge: rawKnowledge, relationships: rawRelationships, warnings } =
+    parseStructureLines(output);
+
+  // Surface parser warnings on the server console — they're non-fatal
+  // (the row was dropped) but useful for diagnosing prompt drift.
+  for (const w of warnings) {
+    console.warn(`[structure parser] ${w}`);
+  }
+
+  // Zod is still the authoritative contract with downstream stages. The
+  // line parser is tolerant on the way in; Zod fails loudly if the
+  // assembled object can't satisfy the schema (e.g. empty topics array,
+  // non-slug id, missing title).
+  const knowledge = Knowledge.parse(rawKnowledge);
+  const relationships = Relationships.parse(rawRelationships);
+
+  if (opts.validateRefs !== false) {
+    assertReferentialIntegrity(knowledge, relationships);
+  }
+
+  galaxy.knowledge = knowledge;
+  galaxy.relationships = relationships;
+  // Title the galaxy from the knowledge title if it's non-empty — usually
+  // more descriptive than the placeholder ingest derived.
+  if (knowledge.title && knowledge.title.length > 0) {
+    galaxy.meta.title = knowledge.title;
   }
 }
 
