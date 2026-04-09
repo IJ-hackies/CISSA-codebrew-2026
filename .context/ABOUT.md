@@ -21,54 +21,64 @@ The core thesis: spatial exploration and storytelling are fundamentally better v
 
 ### The Content Pipeline
 
-This is the engine that makes everything work. It runs in four stages.
+This is the engine that makes everything work. It runs in six stages plus an on-demand scene generator. Every stage reads from and writes to the same `Galaxy` blob — a single JSON object stored in SQLite, keyed by UUID. The full data contract for the blob lives in [`.context/SCHEMA.md`](./SCHEMA.md) as the canonical reference; the Zod source of truth is in `scholarsystem/shared/types/`.
 
-#### Stage 1: Ingest & Structure
+#### Stage 0: Ingest
 
-Raw input (text, PDF content, pasted notes) hits the server. For PDFs, text is extracted via `pdf-parse`. The raw content is then sent to Claude via the Anthropic Messages API with a carefully engineered prompt that performs **structural analysis only** — it produces a hierarchical outline of the material without extracting details yet. This is fast because the output is small regardless of input size.
+Raw input (text, PDF, pasted notes) hits the server. For PDFs, text is extracted via `pdf-parse`. Input provenance (kind, size, hash, 500-char excerpt) is written to the `source` scope; the raw upload is then discarded. The galaxy UUID is minted here and the blob is created with empty downstream scopes and a `pipeline` scope where every later stage is marked `pending`.
 
-The prompt instructs Claude to act as an educational content analyst and to identify: major topic areas, subtopics within each, individual concepts and facts, and the relationships between them (prerequisites, related concepts, contrasts). The output is a strict JSON schema representing the knowledge tree.
+#### Stage 1: Structure
 
-For very large inputs (100+ pages), the system uses a **two-pass parallel approach**: the structural outline from pass one is used to split the document into semantically meaningful chunks (by topic boundary, not arbitrary page splits). These chunks are then fanned out as parallel Claude API calls, each extracting detailed knowledge from its chunk while receiving the full outline as context so cross-references are preserved.
+The content is sent to Claude with a prompt that performs **structural analysis only** — producing a hierarchical outline (topic → subtopic → concept) plus a flat graph of cross-concept relationships. No deep content is extracted yet; each concept gets only a one-sentence hook and a `modelTier` hint (`light` / `standard` / `heavy`) describing its inherent reasoning complexity, which downstream scene generation uses for per-concept model routing.
 
-**Why this matters:** Most AI learning tools over-summarize. They lose the specific formulas, the edge cases, the "this is what the lecturer emphasized" details that students actually need. Scholar System treats content fidelity as a first-class priority. The extraction prompts explicitly instruct Claude to preserve all granular details — specific numbers, exact definitions, named exceptions, worked examples — and flag when content might be ambiguous or incomplete.
+This stage is fast because the output is small regardless of input size, and it's the minimum viable galaxy — the frontend can render the map as soon as this completes, with later stages filling in afterward.
 
-#### Stage 2: Galaxy Generation
+#### Stage 2: Detail (Parallel)
 
-The knowledge tree maps onto a galaxy structure following a consistent spatial metaphor:
+For each concept in the tree, Claude extracts the granular content — full definitions, formulas, worked examples, edge cases, mnemonics, emphasis markers, verbatim source quotes. For very large inputs this is fanned out across parallel chunks split along topic boundaries from Stage 1's outline, with each chunk receiving the full outline as context so cross-references are preserved.
 
-| Knowledge Level | Galaxy Element | Visual Representation |
-|---|---|---|
-| Course / Subject | Galaxy | The full map |
-| Major Topic | Solar System | A star with orbiting bodies |
-| Subtopic | Planet | Distinct world with unique visuals |
-| Concept / Fact | Landmark / Challenge | Interactive element on a planet's surface |
-| Relationship | Warp Lane | Visual connection between related bodies |
+**Why this matters:** Most AI learning tools over-summarize. Scholar System treats content fidelity as a first-class priority — the detail prompts explicitly instruct Claude to preserve all granular details (specific numbers, exact definitions, named exceptions, worked examples) and flag when content is ambiguous or incomplete.
 
-Positions are assigned using a force-directed layout algorithm that clusters related systems together and spaces unrelated ones apart. Each celestial body receives procedurally generated visual parameters based on its content characteristics (more on this in the Visual System section).
+#### Stage 3: Narrative
 
-The complete galaxy state — structure, positions, visual parameters, extracted content per node — is serialized as a JSON blob and stored server-side, keyed by a random UUID. This UUID becomes the shareable URL: `app.com/galaxy/{uuid}`.
+A single Claude call produces the galaxy-wide story spine: setting, protagonist framing, tone and genre, aesthetic direction (palette/atmosphere/motif keywords), a per-topic arc beat, a small recurring cast with distinct voices, and a finale hook. **This stage blocks on Stage 2** so beats can be grounded in specific extracted content rather than guessing at it.
 
-#### Stage 3: Scene Generation (On-Demand)
+Per-planet scenes are later generated *against* this narrative spine, turning what would otherwise be 20 disconnected alien encounters into a coherent journey through one arc. The narrative is also consumed by Stage 5 (visuals) so body theming matches tone — an "eldritch cosmic horror investigation" narrative produces ominous palettes; a "heroic exploration" narrative produces luminous ones.
 
-Scenes are not pre-generated for every planet — that would be slow and expensive. Instead, when a user lands on a planet, a Claude API call generates the interactive scene in real time.
+#### Stage 4: Layout
+
+A deterministic force-directed algorithm — pure code, zero Claude calls — assigns 2D positions to every body. Knowledge-bearing bodies (galaxies, systems, planets, moons, asteroids) are placed from the knowledge tree: topics cluster into systems, subtopics orbit as planets, concepts orbit their subtopic as moons, loose concepts become free-floating asteroids. For uploads with broad material, the clustering may produce multiple galaxies in a shared spatial cluster.
+
+Decorative bodies (nebulae, comets, black holes, dust clouds, asteroid belts) are then sprinkled into empty regions for visual density. Because layout is pure code, it can run the moment Stage 1 finishes, in parallel with Detail + Narrative, recovering most of the latency cost of blocking narrative on detail.
+
+#### Stage 5: Visuals
+
+Claude assigns visual parameters to each knowledge-bearing body — palette, terrain, atmosphere, lighting, mood — informed by the narrative's aesthetic direction and tone so the visual language is coherent across the galaxy. **Decorative bodies are themed entirely by code** from the same narrative aesthetic (no Claude calls), pulling from a hand-authored SVG building-block library.
+
+The complete galaxy state at this point — structure, detail, relationships, narrative, positions, visual parameters, progress — is the full shareable blob. The UUID URL `app.com/galaxy/{uuid}` loads it back in its entirety.
+
+#### Stage 6: Scene Generation (On-Demand, Per-Concept)
+
+Scenes are not pre-generated — when the user lands on a moon (or asteroid, or small-planet-with-no-moons), a Claude call generates the interactive scene and caches it in the `scenes` scope. **Scenes are per-concept, not per-subtopic**, so each moon is its own tight learning unit and the model tier can be routed per scene: `light` concepts use a cheap model, `heavy` concepts use a strong one.
 
 The scene generation prompt includes:
-- The specific concept/content for this planet
-- Context from neighboring/related planets (what has the user already seen?)
+- The concept's full detail from Stage 2
+- The narrative's arc beat for the parent topic (so the scene is a chapter in the arc)
+- The recurring cast (so familiar characters can appear)
+- Context from neighboring/related concepts (what has the user already seen?)
 - The user's progress (what have they completed, what did they struggle with?)
-- Visual parameters for the planet (so narrative matches the environment)
-- A strict output schema: narrative text, character dialogue, a challenge with options, explanation for correct/incorrect answers, and hints
+- Visual parameters for the body (so narrative matches the environment)
+- A strict output schema: opening narrative, dialogue, challenge with options and explanations, closing narrative
 
-The response is streamed to the frontend, so the narrative begins appearing immediately while the full scene loads.
+The response is streamed to the frontend so narrative begins appearing immediately while the full scene loads.
 
-**Scene variety** is achieved through prompt variation. The system rotates through scene archetypes: guardian dialogue (an alien teaches through conversation), exploration discovery (the user finds artifacts that reveal knowledge), environmental puzzle (applying a concept to navigate a hazard), memory echo (replaying a historical event that demonstrates a principle), and cooperative challenge (helping an NPC by using the concept). The archetype is selected based on the content type — formulas get puzzles, historical facts get memory echoes, conceptual explanations get guardian dialogues.
+**Scene variety** comes from a rotation of archetypes — `guardian-dialogue`, `exploration-discovery`, `environmental-puzzle`, `memory-echo`, `cooperative-challenge`. Each archetype has a hand-authored GSAP timeline in the frontend that slots in the Claude-generated content; **Claude does not generate animation sequences**, it generates content for templates.
 
-#### Stage 4: Progress Tracking
+#### Progress Tracking (Continuous)
 
-User progress is stored in the galaxy's JSON blob (no database, no account needed). Each celestial body tracks: visited/unvisited status, challenge attempts and scores, time spent, and hints used. This data feeds back into scene generation — if a user struggled with a prerequisite concept, the next scene will reference and reinforce it.
+User progress lives in the `progress` scope of the galaxy blob (no database, no account needed). Each knowledge-bearing body tracks visited status, challenge attempts with full history, best/last scores, hints used, time spent, and a mastery estimate. This data feeds back into scene generation — if a user struggled with a prerequisite concept, the next scene will reference and reinforce it.
 
-Progress is persisted via the galaxy UUID. As long as the user has their URL, they can resume from where they left off.
+Progress is persisted via the galaxy UUID. As long as the user has their URL, they can resume where they left off.
 
 ---
 
@@ -219,23 +229,31 @@ Exports the galaxy as a shareable format (link, or potentially a summary documen
 
 ## Prompt Engineering
 
-### Content Extraction Prompt (Stage 1 — Structure)
+Every prompt in the pipeline writes into a specific scope of the `Galaxy` blob and its output is validated against the corresponding Zod schema in `shared/types/`. Validation failures fail loudly at the stage boundary instead of surfacing downstream.
 
-The system prompt instructs Claude to act as an educational content analyst. It emphasizes: preserve all specific details (numbers, formulas, named entities, exceptions), identify hierarchical structure (topic → subtopic → concept → fact), flag relationships between concepts (prerequisite, related, contrasting), and output strict JSON matching a provided schema. The prompt includes few-shot examples of correctly extracted knowledge trees to guide the format.
+### Stage 1 — Structure Prompt
 
-### Content Extraction Prompt (Stage 2 — Detail)
+The system prompt instructs Claude to act as an educational content analyst. It emphasizes: preserve the source's own terminology, identify the fixed three-level hierarchy (topic → subtopic → concept), flag cross-concept relationships (prerequisite, related, contrasts, example-of), assign each concept a `kind` (definition / formula / example / fact / principle / process) and a `modelTier` (light / standard / heavy) based on inherent reasoning complexity, and output strict JSON matching the `Knowledge` + `Relationships` schemas. The prompt includes a small worked example to lock in the format.
 
-For each chunk in the parallel extraction pass, Claude receives: the full structural outline (for context), the specific chunk to extract from, and instructions to extract every granular detail — definitions, formulas, examples, edge cases, mnemonics, emphasis markers. The output is a detailed JSON array of knowledge items with metadata (importance level, content type, relationships).
+### Stage 2 — Detail Prompt
 
-### Galaxy Theming Prompt
+For each chunk in the parallel extraction pass, Claude receives: the full structural outline (for context), the specific chunk to extract from, and instructions to extract every granular detail — definitions, formulas, examples, edge cases, mnemonics, emphasis markers, verbatim source quotes. Output is keyed by concept id and validated against the `Detail` schema.
 
-Given the knowledge tree, Claude assigns visual parameters to each celestial body. The prompt provides a mapping guide: abstract/theoretical topics get ethereal, gaseous planets; quantitative/formula-heavy topics get crystalline, geometric worlds; historical/narrative topics get ancient, ruin-covered surfaces; creative/open-ended topics get lush, organic biomes. The prompt includes the full parameter schema and constraints.
+### Stage 3 — Narrative Prompt
 
-### Scene Generation Prompt
+A single call that produces the galaxy-wide story spine. Claude receives the full knowledge tree and extracted detail, and outputs: setting, protagonist framing, premise, stakes, structured tone (primary + genre), aesthetic direction (palette/atmosphere/motif keywords), a per-topic arc beat with role and emotional target, a small recurring cast (each with a distinct voice description — the single most important field for keeping NPCs feeling consistent across independently-generated scenes), a finale hook, and soft hard-constraints. Output is validated against the `Narrative` schema.
 
-The most complex prompt. It receives: the planet's content, visual parameters, the user's progress, the selected scene archetype, and a strict output schema. Claude generates: an opening narrative paragraph (sets the scene), interactive dialogue or exploration text (teaches the concept), a challenge (tests understanding), four response options (one correct, three plausible distractors), explanations for each option, and a closing narrative that connects to the next planet.
+### Stage 5 — Visuals Prompt
 
-The prompt enforces that the scene must teach the *specific* content faithfully — no hallucinating facts, no oversimplifying, no skipping details that were in the original notes.
+Given the knowledge tree **and the narrative's aesthetic direction + tone**, Claude assigns visual parameters to each knowledge-bearing body. Tone-matched theming is what makes the galaxy read as one coherent place rather than a bag of unrelated planets — a cosmic-horror narrative produces ominous palettes, a heroic exploration narrative produces luminous ones. Decorative bodies skip this prompt entirely and are themed by code from the same narrative aesthetic. Output is validated against the `Visuals` schema (discriminated union per body kind).
+
+### Stage 6 — Scene Generation Prompt
+
+The most complex prompt. It receives: the concept's full detail from Stage 2, the narrative's arc beat for the parent topic, the recurring cast (so familiar characters can appear), context from neighboring/related concepts, the user's progress so far, the body's visual parameters, and the selected scene archetype. Claude generates: opening narrative, dialogue lines (each attributed to a speaker id or the narrator), a challenge with options and per-option explanations, and closing narrative. Output is validated against the `Scene` schema.
+
+The prompt enforces that the scene must teach the *specific* concept faithfully — no hallucinating facts, no oversimplifying, no skipping details. It also instructs Claude to treat the scene as a **beat within the galaxy-wide arc**, not an isolated story, so every scene compounds the journey instead of resetting it.
+
+The model used per scene is selected from the concept's `modelTier` hint — `light` concepts go to a cheap model, `heavy` concepts to a strong one. This is the single largest cost lever in the pipeline.
 
 ---
 
@@ -278,30 +296,46 @@ scholarsystem/
 │   │   │   ├── scene.ts              # Scene generation endpoint
 │   │   │   └── upload.ts             # File upload handling
 │   │   ├── pipeline/
-│   │   │   ├── ingest.ts             # PDF/text extraction
-│   │   │   ├── structure.ts          # Stage 1: structural analysis
-│   │   │   ├── extract.ts            # Stage 2: detailed extraction
-│   │   │   ├── galaxy-builder.ts     # Stage 3: galaxy generation
-│   │   │   └── scene-generator.ts    # Stage 4: scene generation
+│   │   │   ├── ingest.ts             # Stage 0: PDF/text extraction, hashing, blob init
+│   │   │   ├── structure.ts          # Stage 1: structural analysis (knowledge + relationships)
+│   │   │   ├── detail.ts             # Stage 2: parallel per-concept detail extraction
+│   │   │   ├── narrative.ts          # Stage 3: galaxy-wide story spine
+│   │   │   ├── layout.ts             # Stage 4: deterministic force-directed layout
+│   │   │   ├── visuals.ts            # Stage 5: per-body theming (Claude + procedural)
+│   │   │   └── scene.ts              # Stage 6: on-demand per-concept scene generation
 │   │   ├── prompts/
 │   │   │   ├── structure.ts          # Structural analysis prompt
-│   │   │   ├── extract.ts            # Detail extraction prompt
-│   │   │   ├── theme.ts              # Visual parameter prompt
+│   │   │   ├── detail.ts             # Detail extraction prompt
+│   │   │   ├── narrative.ts          # Narrative spine prompt
+│   │   │   ├── visuals.ts            # Visual parameter prompt
 │   │   │   └── scene.ts              # Scene generation prompt
 │   │   ├── db/
 │   │   │   └── store.ts              # SQLite key-value operations
 │   │   ├── lib/
-│   │   │   ├── claude.ts             # Anthropic API client wrapper
-│   │   │   └── parallel.ts           # Parallel extraction orchestrator
+│   │   │   ├── spawner.ts            # Local Claude Code spawner (dev) — proxy client later
+│   │   │   └── parallel.ts           # Parallel detail-extraction orchestrator
+│   │   ├── scripts/
+│   │   │   └── test-spawner.ts       # Smoke test for the spawner
 │   │   └── index.ts                  # Server entry point
 │   ├── tsconfig.json
 │   └── package.json
 │
-├── shared/                     # Shared types between client and server
-│   └── types/
-│       ├── galaxy.ts                  # Galaxy, SolarSystem, Planet, etc.
-│       ├── scene.ts                   # Scene, Challenge, Response, etc.
-│       └── api.ts                     # API request/response contracts
+├── shared/                     # Shared Zod schemas + derived TS types
+│   └── types/                  # Source of truth for the Galaxy data contract
+│       ├── ids.ts                     # Slug validator (kebab-case id discipline)
+│       ├── meta.ts                    # id, schemaVersion, timestamps, title
+│       ├── source.ts                  # Input provenance
+│       ├── knowledge.ts               # Topics, subtopics, concepts (flat with id refs)
+│       ├── detail.ts                  # Deep per-concept content
+│       ├── relationships.ts           # Flat cross-link graph
+│       ├── narrative.ts               # Galaxy-wide story spine
+│       ├── spatial.ts                 # Polymorphic bodies (discriminated union on kind)
+│       ├── visuals.ts                 # Per-body visual params (discriminated union)
+│       ├── scenes.ts                  # Cached per-concept scenes
+│       ├── progress.ts                # User progress state
+│       ├── pipeline.ts                # Per-stage status for streaming UI
+│       ├── galaxy.ts                  # Top-level composition of all 11 scopes
+│       └── index.ts                   # Barrel export
 │
 └── README.md
 ```

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p scholarsystem)",
+      "Bash(mv client:*)",
+      "Bash(git -C scholarsystem status -s)"
+    ]
+  }
+}

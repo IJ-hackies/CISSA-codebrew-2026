@@ -39,3 +39,7 @@ Status: **not started** (development uses local Claude Code spawner scripts unti
 ## Changelog
 
 _Append newest entries at the top. Format: `YYYY-MM-DD — what landed — branch/PR`._
+
+- 2026-04-09 — landed canonical galaxy schema as Zod in `shared/types/` (11 scopes: meta, source, knowledge, detail, relationships, narrative, spatial, visuals, scenes, progress, pipeline); full design rationale in `.context/SCHEMA.md` — main
+- 2026-04-09 — Claude Code spawner + smoke-test script in `server/src/lib/spawner.ts` and `server/src/scripts/test-spawner.ts` — main
+- 2026-04-09 — scaffolded `scholarsystem/` project folder with client/server/shared subtree per ABOUT.md — main
