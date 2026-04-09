@@ -6,7 +6,7 @@
 // only its hash + 500-char excerpt, per the blob's "no raw uploads" rule.
 
 import { createHash, randomUUID } from "node:crypto";
-import { Galaxy, Source, SourceKind } from "../../../../shared/types";
+import { Galaxy, Source, SourceKind, SourcePart } from "../../../../shared/types";
 import { createEmptyGalaxy, stageStart, stageDone } from "../../lib/blob";
 
 export interface IngestInput {
@@ -15,6 +15,13 @@ export interface IngestInput {
   text: string;
   /** Optional override title. If omitted, a title is derived from the first non-blank line. */
   title?: string;
+  /**
+   * Per-part provenance for multi-input ingests. When provided, the parts
+   * are recorded verbatim on `source.parts`; the top-level `kind`/
+   * `filename`/hash still describe the concatenated blob as a whole.
+   * Passing a single part is equivalent to a single-file ingest.
+   */
+  parts?: SourcePart[];
 }
 
 export interface IngestResult {
@@ -34,6 +41,7 @@ export function runIngest(input: IngestInput): IngestResult {
     charCount,
     contentHash,
     excerpt,
+    ...(input.parts && input.parts.length > 0 ? { parts: input.parts } : {}),
   };
 
   const title = input.title?.trim() || deriveTitle(input.text);

@@ -25,17 +25,41 @@ export interface GalaxyBlob {
 }
 
 export interface CreateGalaxyInput {
-  text: string
+  /** Pasted text. Optional — can be combined with files or sent alone. */
+  text?: string
   title?: string
+  /** Uploaded files. When any are present, the request is sent as
+   *  multipart and every file plus the pasted text is concatenated into
+   *  a single blob server-side (Option A — boundary-header concat). */
+  files?: File[]
+  /** Legacy — only used on the pure-paste path when no files are attached. */
   filename?: string | null
 }
 
 export async function createGalaxy(input: CreateGalaxyInput): Promise<GalaxyBlob> {
-  const res = await fetch('/api/galaxy/create', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
-  })
+  const hasFiles = (input.files?.length ?? 0) > 0
+  let res: Response
+  if (hasFiles) {
+    // Multipart path: N files + optional title + optional text fallback.
+    // The server merges everything into one blob with `# <filename>`
+    // boundary markers before Stage 0.
+    const form = new FormData()
+    for (const f of input.files!) form.append('file', f, f.name)
+    if (input.title) form.append('title', input.title)
+    if (input.text) form.append('text', input.text)
+    res = await fetch('/api/galaxy/create', { method: 'POST', body: form })
+  } else {
+    // JSON paste path unchanged.
+    res = await fetch('/api/galaxy/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: input.text,
+        title: input.title,
+        filename: input.filename,
+      }),
+    })
+  }
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
     try {
