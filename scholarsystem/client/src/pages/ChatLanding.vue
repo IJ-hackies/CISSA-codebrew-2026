@@ -8,17 +8,18 @@ import RecentGalaxiesStrip from '@/components/RecentGalaxiesStrip.vue'
 import DropOverlay from '@/components/DropOverlay.vue'
 import {
   addRecentGalaxy,
-  generateUuid,
   hasAnyRecentGalaxies,
   listRecentGalaxies,
   type GalaxyEntry,
 } from '@/lib/recentGalaxies'
+import { createGalaxy } from '@/lib/api'
 
 const router = useRouter()
 
 const text = ref('')
 const files = ref<File[]>([])
 const launching = ref(false)
+const launchError = ref<string | null>(null)
 const dropVisible = ref(false)
 const showSuggestions = ref(!hasAnyRecentGalaxies())
 const recents = ref<GalaxyEntry[]>(listRecentGalaxies())
@@ -113,43 +114,67 @@ const placeholderTitle = computed(() => {
   return 'Untitled galaxy'
 })
 
+// Minimum cruise duration so the rocket cinematic still reads even if the
+// pipeline returns faster than the animation. Real pipeline latency is
+// unbounded in v1 (sync POST /api/galaxy/create); if it exceeds this, the
+// cruise just waits on the network promise.
+const MIN_CRUISE_MS = 2500
+
 async function handleSubmit(origin: { x: number; y: number }) {
   if (launching.value) return
-  launching.value = true
 
-  const renderer = galaxyRendererRef.value?.getRenderer()
-  if (!renderer) {
-    // Renderer not ready — just create the entry and bail.
-    finalizeFakeGalaxy()
+  // v1 backend only accepts text. Files are collected in the UI but ignored
+  // until PDF ingest lands.
+  const trimmed = text.value.trim()
+  if (!trimmed) {
+    launchError.value = 'Type some text to launch (file uploads not wired yet).'
     return
   }
 
-  // Tell the renderer where the DOM rocket lives so it can take over from
-  // the same screen position. (DOM button fades via .launching CSS class.)
-  await renderer.launchRocket(origin)
+  launching.value = true
+  launchError.value = null
 
-  // Cruise begins. In mockup mode we simulate Stage 1 with a fixed 3s
-  // timer. TODO: replace with a real "Stage 1 complete" signal from the
-  // SSE stream of POST /api/galaxy/create.
-  await new Promise((r) => setTimeout(r, 3000))
+  const renderer = galaxyRendererRef.value?.getRenderer()
 
-  await renderer.landRocket()
-  finalizeFakeGalaxy()
-}
+  try {
+    // Kick off the real pipeline call in parallel with the rocket launch
+    // animation so cruise time overlaps network time.
+    const pipelinePromise = createGalaxy({
+      text: trimmed,
+      title: placeholderTitle.value,
+      filename: files.value[0]?.name ?? null,
+    })
 
-function finalizeFakeGalaxy() {
-  // TODO: this entire function is the mockup stand-in. Replace with the
-  // real galaxy UUID returned by POST /api/galaxy/create. The localStorage
-  // write stays — it's how the recent-galaxies strip stays in sync with
-  // what the user has explored.
-  const entry: GalaxyEntry = {
-    uuid: generateUuid(),
-    title: placeholderTitle.value,
-    createdAt: Date.now(),
+    if (renderer) {
+      // Tell the renderer where the DOM rocket lives so it can take over
+      // from the same screen position. (DOM button fades via .launching class.)
+      await renderer.launchRocket(origin)
+    }
+
+    // Wait for BOTH: the pipeline result and a minimum cruise feel.
+    const [galaxy] = await Promise.all([
+      pipelinePromise,
+      new Promise((r) => setTimeout(r, MIN_CRUISE_MS)),
+    ])
+
+    if (renderer) {
+      await renderer.landRocket()
+    }
+
+    const entry: GalaxyEntry = {
+      uuid: galaxy.meta.id,
+      title: galaxy.meta.title,
+      createdAt: Date.now(),
+    }
+    addRecentGalaxy(entry)
+    recents.value = listRecentGalaxies()
+    router.push(`/galaxy/${entry.uuid}`)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[chat-landing] launch failed:', message)
+    launchError.value = `Launch failed: ${message}`
+    launching.value = false
   }
-  addRecentGalaxy(entry)
-  recents.value = listRecentGalaxies()
-  router.push(`/galaxy/${entry.uuid}`)
 }
 </script>
 
@@ -178,6 +203,8 @@ function finalizeFakeGalaxy() {
       />
 
       <RecentGalaxiesStrip v-if="recents.length && !launching" :entries="recents" />
+
+      <p v-if="launchError" class="launch-error" role="alert">{{ launchError }}</p>
     </div>
 
     <DropOverlay :visible="dropVisible" />
@@ -241,6 +268,19 @@ function finalizeFakeGalaxy() {
 }
 .stage.launching {
   transform: scale(0.98);
+}
+
+.launch-error {
+  margin: 0;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: rgba(255, 90, 90, 0.08);
+  border: 1px solid rgba(255, 138, 101, 0.3);
+  color: #ff8a65;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  max-width: 520px;
+  text-align: center;
 }
 
 @media (max-width: 640px) {

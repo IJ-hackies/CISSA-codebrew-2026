@@ -10,7 +10,9 @@
       "Bash(git stash:*)",
       "Bash(bun install:*)",
       "Bash(bunx tsc:*)",
-      "Bash(bun -e \"import\\('./src/fixtures/sample-galaxy.ts'\\).then\\(m => console.log\\('fixture ok, id=', m.sampleGalaxy.meta.id, 'bodies=', m.sampleGalaxy.spatial?.bodies.length\\)\\).catch\\(e => { console.error\\('FIXTURE FAILED', e\\); process.exit\\(1\\); }\\)\")"
+      "Bash(bun -e \"import\\('./src/fixtures/sample-galaxy.ts'\\).then\\(m => console.log\\('fixture ok, id=', m.sampleGalaxy.meta.id, 'bodies=', m.sampleGalaxy.spatial?.bodies.length\\)\\).catch\\(e => { console.error\\('FIXTURE FAILED', e\\); process.exit\\(1\\); }\\)\")",
+      "Bash(awk:*)",
+      "Bash(bun -e \"const {Database}=require\\('bun:sqlite'\\);const db=new Database\\('scholarsystem.db'\\);const row=db.prepare\\('SELECT data FROM galaxies ORDER BY created_at DESC LIMIT 1'\\).get\\(\\);const g=JSON.parse\\(row.data\\);console.log\\('id:',g.meta.id\\);console.log\\('title:',g.meta.title\\);console.log\\('source excerpt:',g.source.excerpt.slice\\(0,200\\)\\);console.log\\('\\\\\\\\n=== knowledge ==='\\);console.log\\('knowledge.title:',g.knowledge?.title\\);console.log\\('knowledge.summary:',g.knowledge?.summary\\);console.log\\('\\\\\\\\ntopics:'\\);for\\(const t of g.knowledge?.topics||[]\\)console.log\\(' -',t.id,'::',t.title,'::',t.summary\\);console.log\\('\\\\\\\\nsubtopics:'\\);for\\(const s of g.knowledge?.subtopics||[]\\)console.log\\(' -',s.id,'::',s.title,'::',s.summary,'=> concepts:',s.conceptIds\\);console.log\\('\\\\\\\\nconcepts:'\\);for\\(const c of g.knowledge?.concepts||[]\\)console.log\\(' -',c.id,'['+c.kind+'/'+c.modelTier+']',c.title,'::',c.brief\\);console.log\\('\\\\\\\\nloose:',g.knowledge?.looseConceptIds\\);console.log\\('\\\\\\\\nrelationships:'\\);for\\(const r of g.relationships||[]\\)console.log\\(' -',r.from,'->',r.to,'\\('+r.kind+'\\)'\\);\")"
     ]
   }
 }
