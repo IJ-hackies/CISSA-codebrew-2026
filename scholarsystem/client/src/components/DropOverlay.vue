@@ -28,7 +28,7 @@ defineProps<{ visible: boolean }>()
   align-items: center;
   justify-content: center;
   background:
-    radial-gradient(circle at 50% 50%, rgba(255, 181, 71, 0.08), rgba(10, 5, 16, 0.5));
+    radial-gradient(circle at 50% 50%, rgba(255, 181, 71, 0.08), rgba(5, 8, 16, 0.55));
   backdrop-filter: blur(4px);
   pointer-events: none;
 }

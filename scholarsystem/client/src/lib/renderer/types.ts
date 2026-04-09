@@ -42,6 +42,16 @@ export interface RendererPublicAPI {
   warp(): void
 
   /**
+   * Sustained "camera pull-back" — boosts parallax for as long as the
+   * caller wants. Use for opening cinematic transitions like the history
+   * overlay. Returns when the pull-back has settled.
+   */
+  zoomOut(): Promise<void>
+
+  /** Reverse of zoomOut(). Returns when parallax has returned to neutral. */
+  zoomIn(): Promise<void>
+
+  /**
    * Hand off the rocket from the DOM to the renderer at the given
    * canvas-relative position, then launch it into the void. Returns a
    * promise that resolves once the launch animation completes (rocket
