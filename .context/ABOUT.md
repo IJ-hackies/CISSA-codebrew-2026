@@ -153,7 +153,7 @@ The galaxy overview is rendered as an interactive 2D star map using HTML Canvas 
 | **Vite** | Build tooling. Fast HMR during development, optimized production builds. |
 | **TypeScript** | Type safety across the frontend. Especially important for the complex galaxy state objects. |
 | **HTML Canvas / SVG** | Galaxy map rendering and planet scene composition. Canvas for the starfield, SVG for interactive scene elements. |
-| **CSS (Tailwind)** | Utility-first styling. Parallax transforms, animations, and visual effects via CSS. |
+| **Tailwind CSS v4** | Utility-first styling, CSS-first config (no `tailwind.config.js`). Parallax transforms, animations, and visual effects via CSS. |
 | **GSAP** | Scene timeline orchestration. Sequenced reveals, eased camera moves, choreographed narrative beats. Drives the per-scene "cutscene-feel" during gameplay without giving up interactivity. |
 | **Motion for Vue** (Framer Motion) | Declarative spring physics for UI-layer choreography layered over the SVG/Canvas scene — dialogue boxes, challenge reveals, hover states. |
 | **Rive** | Rigged character animation for planet guardians and NPCs. State machines tie directly into dialogue/challenge flow, so characters react to player choices without regenerating the scene. |
