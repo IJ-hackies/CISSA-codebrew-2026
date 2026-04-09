@@ -1,0 +1,15 @@
+{
+  "name": "scholarsystem-server",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test:spawner": "bun run src/scripts/test-spawner.ts"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.5.0"
+  }
+}
