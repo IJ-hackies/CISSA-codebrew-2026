@@ -7,8 +7,9 @@ Living log of what's done. Update this whenever a stage advances, a branch is pu
 ### Frontend — Chat Landing
 Status: **in progress** (mockup mode, fake submit, localStorage scaffolding)
 - [x] `scholarsystem/client/` scaffolded — Vite + Vue 3 + TS strict + Tailwind v4 + Vue Router + GSAP + Motion-V + ESLint + Prettier + Bun
-- [x] Galaxy renderer foundation: ambient warm-purple void, drifting nebulae, ambient stars, slow Lissajous camera drift, rocket launch/cruise/land, rare shooting-star + nebula-pulse events
+- [x] Galaxy renderer foundation: ambient deep-cosmic void (cool navy/black palette), drifting nebulae, ambient stars, slow Lissajous camera drift, rare shooting-star + nebula-pulse events
 - [x] Renderer public API: `setPointer`, `setFocusAnchor`, `warp`, `zoomOut`/`zoomIn`, `launchRocket`, `landRocket`, `getPhase`, `start`/`stop`/`destroy`
+- [x] Black-hole launch sequence: 5-phase cinematic (vanishing-point slide → entry spiral → steady-state hold → shrink → fade), tunnel-of-stars effect (radial streaks + inward acceleration + wrap), tangent-aligned spiraling rocket, `parallaxBoost` repurposed as unified tunnel-intensity knob also driving `warp()`/`zoomOut()`/`zoomIn()`
 - [x] Chat landing page: logo + wordmark, tagline hero, chat input, suggestion chips, hint-line, supported-formats footer, drag-drop overlay, fake submit → localStorage entry → placeholder galaxy route
 - [x] Unified history system: `HistoryButton` + `HistoryOverlay` with vertical constellation-path layout, responsive interpolation (52→124px glyphs, 148→280px pitch, capped 980px column), translucent backdrop on desktop, scroll-triggered IntersectionObserver reveals, first-time debut glow on the button
 - [x] Mobile system: bottom-pinned input via `useVisualViewport` + safe-area, file-picker primary on touch, sparser starfield, tightened chrome, swapped logo/history-button positions
@@ -53,6 +54,8 @@ Status: **not started** (development uses local Claude Code spawner scripts unti
 
 _Append newest entries at the top. Format: `YYYY-MM-DD — what landed — branch/PR`._
 
+- 2026-04-10 — black-hole launch sequence replaces straight-up rocket: 5-phase cinematic (VP slide → entry spiral → steady-state hold ≥3s → shrink → fade) with tunnel-of-stars (radial streaks + inward acceleration + wrap), tangent-aligned spiraling rocket, stage gets sucked into the void via `.launching` scale-down/blur/fade. `parallaxBoost` repurposed as the unified tunnel-intensity knob that now also visibly drives `warp()` and `zoomOut()`/`zoomIn()` — feat/chat-page
+- 2026-04-10 — palette swap: warm purple void → deep cosmic dark navy/black, cooler nebula palette, cool off-white text, refined tagline weight/sizing, more letterspacing on the wordmark — feat/chat-page
 - 2026-04-10 — chat landing iteration: removed cursor parallax/light entirely (calmer ambient model), tightened input glow, added Lissajous ambient camera drift, added tagline + keyboard hint line + supported-formats footer, added `SCHOLAR SYSTEM` wordmark beside the logo — feat/chat-page
 - 2026-04-10 — unified history system (`HistoryButton` + `HistoryOverlay`) replaces `OrbitingRecents`; one component, responsive interpolation desktop↔mobile, capped 980px column on desktop, translucent backdrop with `Renderer.zoomOut()`/`zoomIn()` camera pull-back, scroll-triggered IntersectionObserver reveals, first-time debut glow on the button — feat/chat-page
 - 2026-04-10 — mobile system landed: bottom-pinned input via `useVisualViewport`, safe-area padding, sparser starfield (80 stars), tightened chrome, swapped logo↔history-button positions on mobile — feat/chat-page
