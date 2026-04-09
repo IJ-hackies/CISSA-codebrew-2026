@@ -3,9 +3,13 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "test:spawner": "bun run src/scripts/test-spawner.ts"
+    "dev": "bun --watch run src/index.ts",
+    "start": "bun run src/index.ts",
+    "test:spawner": "bun run src/scripts/test-spawner.ts",
+    "test:pipeline": "bun run src/scripts/test-pipeline.ts"
   },
   "dependencies": {
+    "hono": "^4.6.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

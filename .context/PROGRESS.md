@@ -5,16 +5,19 @@ Living log of what's done. Update this whenever a stage advances, a branch is pu
 ## Stages
 
 ### Stage 1 — Ingest & Structure
-Status: **not started**
-- [ ] PDF/text ingest (`pdf-parse`)
-- [ ] Structural analysis prompt (knowledge tree JSON)
-- [ ] Two-pass parallel detail extraction for large inputs
+Status: **text path in progress** (PDFs + parallel detail still TBD)
+- [x] Text ingest (hash, excerpt, blank blob) — `pipeline/parsing/ingest.ts`
+- [x] Structural analysis prompt + orchestrator (knowledge + relationships, referential integrity check) — `pipeline/parsing/structure.ts`, `prompts/parsing/structure.ts`
+- [ ] PDF ingest (`pdf-parse`)
+- [ ] Two-pass parallel detail extraction for large inputs (Stage 2)
 
 ### Stage 2 — Galaxy Generation
-Status: **not started**
-- [ ] Force-directed layout of systems/planets
-- [ ] Claude-assigned visual parameters per body
-- [ ] Serialize galaxy JSON + store in SQLite by UUID
+Status: **layout done, visuals pending**
+- [x] Deterministic concentric layout of systems/planets/moons/asteroids (v1, pure code) — `pipeline/worldgen/layout.ts`
+- [x] SQLite key-value store + round-trip validation — `db/store.ts`
+- [x] `POST /api/galaxy/create` runs ingest → structure → layout end-to-end and persists — `routes/galaxy.ts`
+- [ ] Upgrade layout v1 → force-directed pass
+- [ ] Claude-assigned visual parameters per body (Stage 5)
 
 ### Stage 3 — Scene Generation (On-Demand)
 Status: **not started**
@@ -40,6 +43,10 @@ Status: **not started** (development uses local Claude Code spawner scripts unti
 
 _Append newest entries at the top. Format: `YYYY-MM-DD — what landed — branch/PR`._
 
+- 2026-04-09 — first end-to-end pipeline slice: Stage 0 ingest + Stage 1 structure (Claude via spawner, Zod-validated, referential integrity checks) + Stage 4 deterministic layout, wired through `pipeline/runner.ts`, `POST /api/galaxy/create`, and `scripts/test-pipeline.ts`; SQLite store in `db/store.ts`; reserved `conversations` scope in the schema for future in-scene player↔NPC chat (no version bump needed) — backend-server
+- 2026-04-09 — made `scholarsystem/` a Bun workspace root (`scholarsystem/package.json` + `shared/package.json`) so `shared/` can resolve its own `zod` via hoisted root `node_modules`; `bun install` now runs from workspace root, not `server/` — main
+- 2026-04-09 — reorganised `server/src/` into phase-grouped pipeline (parsing/storyline/worldgen/gameplay), added `server/src/README.md` + `pipeline/README.md` + `shared/README.md` as teammate navigation docs — main
+- 2026-04-09 — landed sample galaxy fixture (`server/src/fixtures/sample-galaxy.ts`) + minimal Hono server serving `GET /api/galaxy/:id` from the fixture, so the frontend branch has a real Galaxy shape to render against before the pipeline is built — main
 - 2026-04-09 — landed canonical galaxy schema as Zod in `shared/types/` (11 scopes: meta, source, knowledge, detail, relationships, narrative, spatial, visuals, scenes, progress, pipeline); full design rationale in `.context/SCHEMA.md` — main
 - 2026-04-09 — Claude Code spawner + smoke-test script in `server/src/lib/spawner.ts` and `server/src/scripts/test-spawner.ts` — main
 - 2026-04-09 — scaffolded `scholarsystem/` project folder with client/server/shared subtree per ABOUT.md — main

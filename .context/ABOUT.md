@@ -23,6 +23,8 @@ The core thesis: spatial exploration and storytelling are fundamentally better v
 
 This is the engine that makes everything work. It runs in six stages plus an on-demand scene generator. Every stage reads from and writes to the same `Galaxy` blob — a single JSON object stored in SQLite, keyed by UUID. The full data contract for the blob lives in [`.context/SCHEMA.md`](./SCHEMA.md) as the canonical reference; the Zod source of truth is in `scholarsystem/shared/types/`.
 
+**Current implementation state (2026-04-09):** Stages 0 (ingest, pure code), 1 (structure, single Claude call), and 4 (layout, deterministic pure code) are wired end-to-end in `server/src/pipeline/runner.ts` and exposed via `POST /api/galaxy/create`. A CLI harness in `server/src/scripts/test-pipeline.ts` runs the same slice against a file / stdin / inline text and persists the result. Stages 2 (detail), 3 (narrative), 5 (visuals), and 6 (scene) are not yet implemented — their scopes stay at their empty defaults and their `pipeline[stage].status` remains `"pending"`. Blobs from the current slice are still fully schema-valid and renderable from just `knowledge` + `relationships` + `spatial`, which is the minimum the frontend needs to draw a playable map.
+
 #### Stage 0: Ingest
 
 Raw input (text, PDF, pasted notes) hits the server. For PDFs, text is extracted via `pdf-parse`. Input provenance (kind, size, hash, 500-char excerpt) is written to the `source` scope; the raw upload is then discarded. The galaxy UUID is minted here and the blob is created with empty downstream scopes and a `pipeline` scope where every later stage is marked `pending`.
@@ -50,6 +52,8 @@ Per-planet scenes are later generated *against* this narrative spine, turning wh
 A deterministic force-directed algorithm — pure code, zero Claude calls — assigns 2D positions to every body. Knowledge-bearing bodies (galaxies, systems, planets, moons, asteroids) are placed from the knowledge tree: topics cluster into systems, subtopics orbit as planets, concepts orbit their subtopic as moons, loose concepts become free-floating asteroids. For uploads with broad material, the clustering may produce multiple galaxies in a shared spatial cluster.
 
 Decorative bodies (nebulae, comets, black holes, dust clouds, asteroid belts) are then sprinkled into empty regions for visual density. Because layout is pure code, it can run the moment Stage 1 finishes, in parallel with Detail + Narrative, recovering most of the latency cost of blocking narrative on detail.
+
+*Current implementation:* v1 is a **deterministic concentric** layout, not force-directed — topics on a ring around the origin, subtopics orbiting their system's star, concepts orbiting their planet, loose concepts on an outer ring as asteroids, plus a handful of default decoratives. Chosen over force-directed for v1 because every position is a pure function of tree indices, so runs are stable and diffs are trivially debuggable. The force-directed upgrade is a drop-in replacement for the placement function — the surrounding orchestration, bounds, `progress.totalBodies` counting, and decorative pass don't change.
 
 #### Stage 5: Visuals
 
@@ -211,7 +215,7 @@ The galaxy overview is rendered as an interactive 2D star map using HTML Canvas 
 ### Endpoints
 
 **POST `/api/galaxy/create`**
-Accepts raw text or file upload. Initiates the content pipeline. Returns a galaxy UUID immediately, then streams extraction progress via SSE.
+Accepts raw text (PDF upload TBD). Runs the currently-implemented pipeline slice (ingest → structure → layout) synchronously, persists the blob to SQLite, and returns the full `Galaxy` JSON with a 201. SSE streaming of extraction progress is a planned upgrade once the latency budget demands it — today's slice is fast enough that a blocking response is fine.
 
 **GET `/api/galaxy/:id`**
 Returns the full galaxy state JSON — structure, positions, visual parameters, progress.
@@ -259,8 +263,11 @@ The model used per scene is selected from the concept's `modelTier` hint — `li
 
 ## Project Structure
 
+`scholarsystem/` is a Bun workspace root — dependencies install once from the top and hoist into `scholarsystem/node_modules`, so `shared/` and `server/` both resolve `zod` from the same place without needing their own installs.
+
 ```
 scholarsystem/
+├── package.json                # Workspace root (declares server + shared)
 ├── client/                     # Vue 3 frontend
 │   ├── src/
 │   │   ├── components/
@@ -292,35 +299,44 @@ scholarsystem/
 ├── server/                     # Bun + Hono backend
 │   ├── src/
 │   │   ├── routes/
-│   │   │   ├── galaxy.ts             # Galaxy CRUD endpoints
-│   │   │   ├── scene.ts              # Scene generation endpoint
-│   │   │   └── upload.ts             # File upload handling
-│   │   ├── pipeline/
-│   │   │   ├── ingest.ts             # Stage 0: PDF/text extraction, hashing, blob init
-│   │   │   ├── structure.ts          # Stage 1: structural analysis (knowledge + relationships)
-│   │   │   ├── detail.ts             # Stage 2: parallel per-concept detail extraction
-│   │   │   ├── narrative.ts          # Stage 3: galaxy-wide story spine
-│   │   │   ├── layout.ts             # Stage 4: deterministic force-directed layout
-│   │   │   ├── visuals.ts            # Stage 5: per-body theming (Claude + procedural)
-│   │   │   └── scene.ts              # Stage 6: on-demand per-concept scene generation
-│   │   ├── prompts/
-│   │   │   ├── structure.ts          # Structural analysis prompt
-│   │   │   ├── detail.ts             # Detail extraction prompt
-│   │   │   ├── narrative.ts          # Narrative spine prompt
-│   │   │   ├── visuals.ts            # Visual parameter prompt
-│   │   │   └── scene.ts              # Scene generation prompt
+│   │   │   └── galaxy.ts             # GET /api/galaxy/:id, POST /api/galaxy/create
+│   │   ├── pipeline/                 # Content engine, grouped by phase
+│   │   │   ├── README.md             # Stage order, phase grouping, rules
+│   │   │   ├── runner.ts             # runPipeline(): ingest → structure → layout (current slice)
+│   │   │   ├── parsing/              # Stages 0-2: input → knowledge
+│   │   │   │   ├── ingest.ts         # Stage 0: hash, excerpt, init blob  [IMPLEMENTED]
+│   │   │   │   ├── structure.ts      # Stage 1: hierarchical knowledge + relationships + referential-integrity checks  [IMPLEMENTED]
+│   │   │   │   └── detail.ts         # Stage 2: parallel per-concept detail extraction  [NOT YET]
+│   │   │   ├── storyline/            # Stage 3: narrative spine
+│   │   │   │   └── narrative.ts      # Stage 3: galaxy-wide story, arc beats, cast  [NOT YET]
+│   │   │   ├── worldgen/             # Stages 4-5: building the game world
+│   │   │   │   ├── layout.ts         # Stage 4: deterministic concentric layout v1  [IMPLEMENTED]
+│   │   │   │   └── visuals.ts        # Stage 5: per-body theming  [NOT YET]
+│   │   │   └── gameplay/             # Stage 6: interactive content
+│   │   │       └── scene.ts          # Stage 6: on-demand per-concept scene gen  [NOT YET]
+│   │   ├── prompts/                  # Claude prompts — MIRRORS pipeline/ structure
+│   │   │   ├── parsing/              # structure.ts [IMPLEMENTED], detail.ts [NOT YET]
+│   │   │   ├── storyline/            # narrative.ts [NOT YET]
+│   │   │   ├── worldgen/             # visuals.ts [NOT YET]
+│   │   │   └── gameplay/             # scene.ts [NOT YET]
 │   │   ├── db/
-│   │   │   └── store.ts              # SQLite key-value operations
+│   │   │   └── store.ts              # SQLite key-value store, validates on write + read
 │   │   ├── lib/
 │   │   │   ├── spawner.ts            # Local Claude Code spawner (dev) — proxy client later
-│   │   │   └── parallel.ts           # Parallel detail-extraction orchestrator
+│   │   │   └── blob.ts               # Empty-galaxy factory, stage status transitions, JSON extraction
+│   │   ├── fixtures/
+│   │   │   └── sample-galaxy.ts      # Valid Galaxy fixture, validated at import
 │   │   ├── scripts/
-│   │   │   └── test-spawner.ts       # Smoke test for the spawner
-│   │   └── index.ts                  # Server entry point
+│   │   │   ├── test-spawner.ts       # Smoke test for the spawner
+│   │   │   └── test-pipeline.ts      # End-to-end harness: text in → validated Galaxy out → persisted
+│   │   ├── README.md                 # Navigation guide for teammates
+│   │   └── index.ts                  # Hono server entry point
 │   ├── tsconfig.json
 │   └── package.json
 │
-├── shared/                     # Shared Zod schemas + derived TS types
+├── shared/                     # Shared Zod schemas + derived TS types (workspace member)
+│   ├── package.json            # Declares zod dep — hoisted to workspace root
+│   ├── README.md
 │   └── types/                  # Source of truth for the Galaxy data contract
 │       ├── ids.ts                     # Slug validator (kebab-case id discipline)
 │       ├── meta.ts                    # id, schemaVersion, timestamps, title
@@ -332,6 +348,7 @@ scholarsystem/
 │       ├── spatial.ts                 # Polymorphic bodies (discriminated union on kind)
 │       ├── visuals.ts                 # Per-body visual params (discriminated union)
 │       ├── scenes.ts                  # Cached per-concept scenes
+│       ├── conversations.ts            # Reserved: per-body player↔NPC chat turns (chat feature TBD)
 │       ├── progress.ts                # User progress state
 │       ├── pipeline.ts                # Per-stage status for streaming UI
 │       ├── galaxy.ts                  # Top-level composition of all 11 scopes

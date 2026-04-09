@@ -3,7 +3,14 @@
     "allow": [
       "Bash(mkdir -p scholarsystem)",
       "Bash(mv client:*)",
-      "Bash(git -C scholarsystem status -s)"
+      "Bash(git -C scholarsystem status -s)",
+      "Bash(git fetch:*)",
+      "Bash(git pull:*)",
+      "Bash(git checkout:*)",
+      "Bash(git stash:*)",
+      "Bash(bun install:*)",
+      "Bash(bunx tsc:*)",
+      "Bash(bun -e \"import\\('./src/fixtures/sample-galaxy.ts'\\).then\\(m => console.log\\('fixture ok, id=', m.sampleGalaxy.meta.id, 'bodies=', m.sampleGalaxy.spatial?.bodies.length\\)\\).catch\\(e => { console.error\\('FIXTURE FAILED', e\\); process.exit\\(1\\); }\\)\")"
     ]
   }
 }
