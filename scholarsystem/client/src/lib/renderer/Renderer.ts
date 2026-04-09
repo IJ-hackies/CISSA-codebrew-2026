@@ -1,15 +1,20 @@
 /**
- * Galaxy Renderer — canvas-based parallax starfield + nebulae + rocket.
+ * Galaxy Renderer — canvas-based ambient starfield + nebulae + rocket.
+ *
+ * Calmer interaction model: the cursor no longer parallax-shifts the
+ * background. Instead it acts as a *local* warm light source with a
+ * smoothstep falloff radius, accelerating star twinkle within reach. The
+ * void itself stays still — only the cursor's local pool of light moves.
  *
  * Designed to be reusable: the chat landing mounts it in empty/decorative
- * mode (no bodies), and the eventual /galaxy/:id view will mount the same
+ * mode (no bodies); the eventual /galaxy/:id view will mount the same
  * class with bodies + visual params layered on top.
  *
  * Render loop = single requestAnimationFrame.
  *
  * TODO(post-fx): a WebGL composite pass (grain/bloom/god-rays) belongs in
  * a sibling module that takes this canvas as a texture. Hook is the
- * `enablePostFx` flag in QualityProfile — for now we just draw 2D.
+ * `enablePostFx` flag in QualityProfile.
  */
 
 import { gsap } from 'gsap'
@@ -23,15 +28,16 @@ import type {
 } from './types'
 
 interface Star {
-  /** Normalized [0,1] position in world space. */
   x: number
   y: number
-  /** Layer index 0..parallaxLayers-1; higher = closer = more parallax. */
   layer: number
   size: number
   baseAlpha: number
   twinklePhase: number
   twinkleSpeed: number
+  /** Tunnel offset from base position (0,0 when tunnel inactive). */
+  tunnelOffsetX: number
+  tunnelOffsetY: number
 }
 
 interface Nebula {
@@ -43,6 +49,8 @@ interface Nebula {
   color: string
   alpha: number
   driftSpeed: number
+  /** 0..1 transient intensity boost from a nebula-pulse rare event. */
+  pulse: number
 }
 
 interface RocketState {
@@ -52,19 +60,26 @@ interface RocketState {
   rotation: number
   scale: number
   flame: number
-  /** Bloom radius around the engine, in CSS px. */
   bloom: number
+  alpha: number
 }
 
 interface CameraState {
-  /** Subtle warp shake offset. */
   shakeX: number
   shakeY: number
-  /** Multiplier on parallax intensity (boosted briefly during warp/launch). */
+  /** Multiplier on parallax intensity. Now only used by warp/zoom triggers. */
   parallaxBoost: number
 }
 
-const STAR_LAYER_DEPTH = [0.005, 0.012, 0.022, 0.04]
+interface ShootingStar {
+  x: number
+  y: number
+  vx: number
+  vy: number
+  length: number
+  life: number
+  maxLife: number
+}
 
 export class GalaxyRenderer implements RendererPublicAPI {
   private canvas: HTMLCanvasElement
@@ -86,7 +101,7 @@ export class GalaxyRenderer implements RendererPublicAPI {
   private smoothedPointer = { x: 0, y: 0, active: 0 }
 
   private focusAnchor: { x: number; y: number } | null = null
-  private focusIntensity = 0 // smoothed 0..1
+  private focusIntensity = 0
 
   private rocket: RocketState = {
     active: false,
@@ -96,7 +111,16 @@ export class GalaxyRenderer implements RendererPublicAPI {
     scale: 1,
     flame: 0,
     bloom: 0,
+    alpha: 1,
   }
+
+  // ── Black-hole launch state ─────────────────────────────────────────────
+  /** Vanishing point — center of the tunnel + spiral. */
+  private vp = { x: 0, y: 0 }
+  /** Spiral state — radius, angle, angular speed. */
+  private spiral = { radius: 0, angle: 0, angularSpeed: 0 }
+  /** Wall-clock seconds when phase 2 (cruise) began. Used for min-hold. */
+  private cruiseStartedAt = 0
   private rocketParticles: {
     x: number
     y: number
@@ -112,6 +136,16 @@ export class GalaxyRenderer implements RendererPublicAPI {
   private phase: RendererPhase = 'idle'
 
   private lastTime = 0
+  /** Wall-clock seconds since renderer started — drives ambient effects. */
+  private elapsed = 0
+
+  // ── Rare ambient events ───────────────────────────────────────────────
+  private shootingStars: ShootingStar[] = []
+  private nextShootingAt = 0
+  private nextPulseAt = 0
+  /** Slow Lissajous-style ambient drift offset, applied to background. */
+  private driftX = 0
+  private driftY = 0
 
   private resizeObserver: ResizeObserver | null = null
 
@@ -139,10 +173,12 @@ export class GalaxyRenderer implements RendererPublicAPI {
     if (this.running || this.destroyed) return
     this.running = true
     this.lastTime = performance.now()
+    this.scheduleNextEvents()
     const tick = (t: number) => {
       if (!this.running) return
       const dt = Math.min(48, t - this.lastTime) / 1000
       this.lastTime = t
+      this.elapsed += dt
       this.update(dt)
       this.draw()
       this.rafId = requestAnimationFrame(tick)
@@ -171,8 +207,31 @@ export class GalaxyRenderer implements RendererPublicAPI {
     this.focusAnchor = point
   }
 
+  zoomOut(): Promise<void> {
+    return new Promise((resolve) => {
+      gsap.killTweensOf(this.camera, 'parallaxBoost')
+      gsap.to(this.camera, {
+        parallaxBoost: 3.6,
+        duration: 0.7,
+        ease: 'power2.out',
+        onComplete: () => resolve(),
+      })
+    })
+  }
+
+  zoomIn(): Promise<void> {
+    return new Promise((resolve) => {
+      gsap.killTweensOf(this.camera, 'parallaxBoost')
+      gsap.to(this.camera, {
+        parallaxBoost: 1,
+        duration: 0.6,
+        ease: 'power2.inOut',
+        onComplete: () => resolve(),
+      })
+    })
+  }
+
   warp(): void {
-    // Brief camera shake + parallax boost.
     gsap.to(this.camera, {
       parallaxBoost: 2.4,
       duration: 0.12,
@@ -197,67 +256,133 @@ export class GalaxyRenderer implements RendererPublicAPI {
     })
   }
 
+  /**
+   * Black-hole launch sequence. Phases:
+   *   0. (400ms)  vanishing point + rocket lerp from click → screen center
+   *   1. (1100ms) entry spiral — scale 0.15→1.4, radius 0→max, tunnel ramps
+   *   2. (≥3000ms) steady-state hold — constant scale, constant radius
+   *
+   * Resolves at the end of phase 1 (when cruise begins). Caller waits, then
+   * calls landRocket() which plays phase 3.
+   */
   launchRocket(originCanvasPx: { x: number; y: number }): Promise<void> {
     return new Promise((resolve) => {
+      // Reset state.
       this.rocket.active = true
-      this.rocket.x = originCanvasPx.x
-      this.rocket.y = originCanvasPx.y
-      this.rocket.rotation = -Math.PI / 2
-      this.rocket.scale = 1
+      this.rocket.alpha = 1
+      this.rocket.scale = 0.15
       this.rocket.flame = 0
       this.rocket.bloom = 0
+      this.rocket.x = originCanvasPx.x
+      this.rocket.y = originCanvasPx.y
+      this.spiral.radius = 0
+      this.spiral.angle = 0
+      this.spiral.angularSpeed = 0
+      this.vp.x = originCanvasPx.x
+      this.vp.y = originCanvasPx.y
       this.phase = 'launch'
 
-      // Determine cruise destination — roughly the upper-third center.
-      const cruiseTargetX = this.width / 2
-      const cruiseTargetY = this.height * 0.32
+      // Reset star tunnel offsets so the streaks start clean.
+      for (const s of this.stars) {
+        s.tunnelOffsetX = 0
+        s.tunnelOffsetY = 0
+      }
 
-      // Briefly warp the void to sell the launch.
-      this.warp()
+      const centerX = this.width / 2
+      const centerY = this.height / 2
+      const orbitRadius = Math.min(240, Math.max(120, Math.min(this.width, this.height) * 0.16))
+      const angularP1 = (Math.PI * 2) / 0.8 // ~0.8s/rev = ~7.85 rad/s
+      const angularP2 = (Math.PI * 2) / 2.0 // ~2s/rev = ~3.14 rad/s
+
+      // Kill any prior tweens on these targets.
+      gsap.killTweensOf([this.vp, this.spiral, this.rocket, this.camera])
 
       const tl = gsap.timeline({
         onComplete: () => {
-          this.phase = 'cruise'
-          this.startCruiseLoop()
+          this.cruiseStartedAt = this.elapsed
           resolve()
         },
       })
-      tl.to(this.rocket, { flame: 1, bloom: 80, duration: 0.25, ease: 'power2.out' }, 0)
+
+      // ── Phase 0: vanishing point slide (400ms) ──────────────────────────
+      tl.to(
+        this.vp,
+        { x: centerX, y: centerY, duration: 0.4, ease: 'power2.inOut' },
+        0,
+      )
+      tl.to(this.camera, { parallaxBoost: 1.5, duration: 0.4, ease: 'power2.out' }, 0)
+      tl.to(this.rocket, { flame: 0.6, bloom: 50, duration: 0.4, ease: 'power2.out' }, 0)
+
+      // ── Phase 1: entry spiral (1100ms) ──────────────────────────────────
+      tl.to(
+        this.spiral,
+        { radius: orbitRadius, angularSpeed: angularP1, duration: 1.1, ease: 'power2.out' },
+        0.4,
+      )
       tl.to(
         this.rocket,
-        {
-          x: cruiseTargetX,
-          y: cruiseTargetY,
-          scale: 0.55,
-          duration: 1.6,
-          ease: 'power2.in',
-        },
-        0.1,
+        { scale: 1.4, flame: 1, bloom: 110, duration: 1.1, ease: 'power2.out' },
+        0.4,
       )
+      tl.to(this.camera, { parallaxBoost: 4.0, duration: 1.1, ease: 'power2.in' }, 0.4)
+
+      // ── Phase 2 entry: ease the angular speed down to steady-state ──────
+      // (Runs in the first 0.4s after phase 1 ends.)
+      tl.to(
+        this.spiral,
+        { angularSpeed: angularP2, duration: 0.6, ease: 'power2.inOut' },
+        1.5,
+      )
+      tl.to(this.camera, { parallaxBoost: 4.5, duration: 0.6, ease: 'sine.inOut' }, 1.5)
     })
   }
 
+  /**
+   * Black-hole landing. Plays phases 3a (shrink) and 3b (fade) once the
+   * minimum cruise hold has elapsed. Resolves when the rocket has fully
+   * faded — caller should navigate immediately on resolve.
+   */
   landRocket(): Promise<void> {
     return new Promise((resolve) => {
-      this.stopCruiseLoop()
-      this.phase = 'land'
-      const tl = gsap.timeline({
-        onComplete: () => {
-          this.phase = 'arrived'
-          this.rocket.active = false
-          resolve()
-        },
-      })
-      // Drift forward into the deep, then fade.
-      tl.to(this.rocket, {
-        scale: 0.05,
-        y: this.height * 0.18,
-        flame: 0,
-        bloom: 0,
-        duration: 1.2,
-        ease: 'power2.in',
-      })
+      // Honor minimum hold: even if backend completes early, hold for 3s
+      // since cruise started so the cinematic always registers.
+      const minHoldSec = 3.0
+      const elapsedHold = this.elapsed - this.cruiseStartedAt
+      const waitMs = Math.max(0, (minHoldSec - elapsedHold) * 1000)
+      const startPhase3 = () => {
+        this.playLandingPhases(resolve)
+      }
+      if (waitMs > 0) {
+        setTimeout(startPhase3, waitMs)
+      } else {
+        startPhase3()
+      }
     })
+  }
+
+  private playLandingPhases(resolve: () => void): void {
+    this.phase = 'land'
+    const angularP3 = (Math.PI * 2) / 0.8 // back to ~0.8s/rev for the exit
+    const tl = gsap.timeline({
+      onComplete: () => {
+        this.phase = 'arrived'
+        this.rocket.active = false
+        resolve()
+      },
+    })
+
+    // ── Phase 3a: shrink (700ms) ──────────────────────────────────────────
+    tl.to(this.spiral, { angularSpeed: angularP3, duration: 0.5, ease: 'power2.in' }, 0)
+    tl.to(
+      this.rocket,
+      { scale: 0.2, flame: 0.4, bloom: 30, duration: 0.7, ease: 'power2.in' },
+      0,
+    )
+    tl.to(this.camera, { parallaxBoost: 3.2, duration: 0.7, ease: 'sine.inOut' }, 0)
+
+    // ── Phase 3b: fade (600ms) ────────────────────────────────────────────
+    tl.to(this.rocket, { alpha: 0, flame: 0, bloom: 0, duration: 0.6, ease: 'power2.in' }, 0.7)
+    tl.to(this.camera, { parallaxBoost: 1, duration: 0.6, ease: 'power2.out' }, 0.7)
   }
 
   getPhase(): RendererPhase {
@@ -267,23 +392,6 @@ export class GalaxyRenderer implements RendererPublicAPI {
   // ────────────────────────────────────────────────────────────────────────
   // Internal
   // ────────────────────────────────────────────────────────────────────────
-
-  private cruiseTween: gsap.core.Tween | null = null
-  private startCruiseLoop(): void {
-    // Subtle hover bob + flame breathing during cruise.
-    this.cruiseTween = gsap.to(this.rocket, {
-      y: '-=8',
-      flame: 0.8,
-      duration: 1.6,
-      ease: 'sine.inOut',
-      yoyo: true,
-      repeat: -1,
-    })
-  }
-  private stopCruiseLoop(): void {
-    this.cruiseTween?.kill()
-    this.cruiseTween = null
-  }
 
   private handleResize(): void {
     const rect = this.canvas.getBoundingClientRect()
@@ -309,13 +417,15 @@ export class GalaxyRenderer implements RendererPublicAPI {
         baseAlpha: 0.3 + rand() * 0.7,
         twinklePhase: rand() * Math.PI * 2,
         twinkleSpeed: 0.4 + rand() * 1.6,
+        tunnelOffsetX: 0,
+        tunnelOffsetY: 0,
       })
     }
   }
 
   private seedNebulae(): void {
     const rand = rngFromString('scholar-system-nebulae-v1')
-    const palette = ['#4a1d5c', '#6b2d3f', '#3d1a2e', '#2a0f3a']
+    const palette = ['#0e1828', '#0a121f', '#060c18', '#101a2c']
     this.nebulae = []
     for (let i = 0; i < this.quality.nebulaCount; i++) {
       this.nebulae.push({
@@ -327,39 +437,187 @@ export class GalaxyRenderer implements RendererPublicAPI {
         color: palette[Math.floor(rand() * palette.length)],
         alpha: 0.15 + rand() * 0.1,
         driftSpeed: 0.005 + rand() * 0.012,
+        pulse: 0,
       })
     }
   }
 
+  // ── Rare-event scheduler ────────────────────────────────────────────────
+
+  private isLowQuality(): boolean {
+    return this.quality.tier === 'low'
+  }
+  private slowFactor(): number {
+    return this.isLowQuality() ? 2 : 1
+  }
+  private jitterDelay(meanSec: number): number {
+    // Mean ± 50%.
+    return meanSec * (0.5 + Math.random()) * this.slowFactor()
+  }
+
+  private scheduleNextEvents(): void {
+    const t = this.elapsed
+    this.nextShootingAt = t + this.jitterDelay(4)
+    this.nextPulseAt = t + this.jitterDelay(9)
+  }
+
+  private maybeFireEvents(): void {
+    if (this.elapsed >= this.nextShootingAt) {
+      this.spawnShootingStar()
+      this.nextShootingAt = this.elapsed + this.jitterDelay(4)
+    }
+    if (this.elapsed >= this.nextPulseAt) {
+      this.spawnNebulaPulse()
+      this.nextPulseAt = this.elapsed + this.jitterDelay(9)
+    }
+  }
+
+  private spawnShootingStar(): void {
+    // Diagonal angle, sweeps across part of the screen. Length scales
+    // with viewport diagonal so it always crosses a similar fraction.
+    const diag = Math.hypot(this.width, this.height)
+    const length = diag * (0.18 + Math.random() * 0.18)
+    // Angle: roughly diagonal (down-right or down-left).
+    const baseAngle = Math.random() < 0.5 ? Math.PI * 0.18 : Math.PI - Math.PI * 0.18
+    const angle = baseAngle + (Math.random() - 0.5) * 0.4
+    // Start somewhere off-screen on the side it's heading from.
+    const speed = diag * 0.55 // px/sec — fast streak
+    const startX = Math.cos(angle) > 0 ? -40 : this.width + 40
+    const startY = Math.random() * this.height * 0.6
+    this.shootingStars.push({
+      x: startX,
+      y: startY,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      length,
+      life: 0,
+      maxLife: 1.2 + Math.random() * 0.6,
+    })
+  }
+
+  private spawnNebulaPulse(): void {
+    if (!this.nebulae.length) return
+    const idx = Math.floor(Math.random() * this.nebulae.length)
+    const target = this.nebulae[idx]
+    gsap.killTweensOf(target, 'pulse')
+    gsap.to(target, {
+      pulse: 1,
+      duration: 1.6,
+      ease: 'sine.inOut',
+      onComplete: () => {
+        gsap.to(target, { pulse: 0, duration: 1.9, ease: 'sine.inOut' })
+      },
+    })
+  }
+
+  // ── Frame update ────────────────────────────────────────────────────────
+
   private update(dt: number): void {
-    // Smooth pointer for a more cinematic parallax feel.
+    // Smooth pointer.
     const lerp = 1 - Math.exp(-dt * 6)
     this.smoothedPointer.x += (this.pointer.x - this.smoothedPointer.x) * lerp
     this.smoothedPointer.y += (this.pointer.y - this.smoothedPointer.y) * lerp
     this.smoothedPointer.active += (this.pointer.active - this.smoothedPointer.active) * lerp
 
-    // Smooth focus intensity.
+    // Smooth focus base intensity.
     const targetFocus = this.focusAnchor ? 1 : 0
     this.focusIntensity += (targetFocus - this.focusIntensity) * (1 - Math.exp(-dt * 5))
 
-    // Twinkle phases.
+    // Twinkle phases — purely ambient now.
     for (const s of this.stars) {
       s.twinklePhase += dt * s.twinkleSpeed
     }
 
-    // Slow nebula drift.
-    for (const n of this.nebulae) {
-      n.x += Math.cos(performance.now() * 0.00005 + n.rotation) * n.driftSpeed * dt
-      n.y += Math.sin(performance.now() * 0.00005 + n.rotation) * n.driftSpeed * dt
+    // ── Tunnel star motion (driven by parallaxBoost) ─────────────────────
+    // When parallaxBoost > ~1.05, stars accelerate inward toward the
+    // vanishing point. Inward speed scales with the boost. Stars that
+    // reach the vanishing point wrap to the far edge in the same direction.
+    const boostExcess = Math.max(0, this.camera.parallaxBoost - 1)
+    if (boostExcess > 0.05) {
+      const speed = boostExcess * 380 // px/sec at boost = 2; 1140 at boost = 4
+      const wrapDist = Math.hypot(this.width, this.height) * 0.55
+      for (const s of this.stars) {
+        const baseX = s.x * this.width
+        const baseY = s.y * this.height
+        const px = baseX + s.tunnelOffsetX
+        const py = baseY + s.tunnelOffsetY
+        const dx = this.vp.x - px
+        const dy = this.vp.y - py
+        const d = Math.hypot(dx, dy) || 1
+        // Move inward.
+        const ux = dx / d
+        const uy = dy / d
+        s.tunnelOffsetX += ux * speed * dt
+        s.tunnelOffsetY += uy * speed * dt
+        // Wrap if reached the vanishing point.
+        if (d < 6) {
+          // Pick a random direction outward and place at wrapDist from VP.
+          const angle = Math.random() * Math.PI * 2
+          const wx = this.vp.x + Math.cos(angle) * wrapDist
+          const wy = this.vp.y + Math.sin(angle) * wrapDist
+          s.tunnelOffsetX = wx - baseX
+          s.tunnelOffsetY = wy - baseY
+        }
+      }
+    } else {
+      // Decay any residual offsets back to zero.
+      const decay = 1 - Math.exp(-dt * 3)
+      for (const s of this.stars) {
+        if (s.tunnelOffsetX !== 0 || s.tunnelOffsetY !== 0) {
+          s.tunnelOffsetX *= 1 - decay
+          s.tunnelOffsetY *= 1 - decay
+          if (Math.abs(s.tunnelOffsetX) < 0.1) s.tunnelOffsetX = 0
+          if (Math.abs(s.tunnelOffsetY) < 0.1) s.tunnelOffsetY = 0
+        }
+      }
     }
 
-    // Particles.
+    // ── Spiral integration (rocket position + rotation) ──────────────────
+    if (this.rocket.active) {
+      this.spiral.angle += this.spiral.angularSpeed * dt
+      const cosA = Math.cos(this.spiral.angle)
+      const sinA = Math.sin(this.spiral.angle)
+      this.rocket.x = this.vp.x + cosA * this.spiral.radius
+      this.rocket.y = this.vp.y + sinA * this.spiral.radius
+      // Tangent direction along the orbit (counter-clockwise).
+      // Velocity = R * dθ/dt * (-sin, cos). The drawRocket() helper treats
+      // `rotation` as the angle whose (cos, sin) IS the nose direction —
+      // so set rotation to atan2 of the velocity vector.
+      const vx = -sinA
+      const vy = cosA
+      this.rocket.rotation = Math.atan2(vy, vx)
+    }
+
+    // Faster slow drift on nebulae — adds ambient life.
+    for (const n of this.nebulae) {
+      n.x += Math.cos(performance.now() * 0.00012 + n.rotation) * n.driftSpeed * 3.5 * dt
+      n.y += Math.sin(performance.now() * 0.00012 + n.rotation) * n.driftSpeed * 3.5 * dt
+    }
+
+    // Ambient camera drift — Lissajous curve, very slow, very small.
+    // Gives the whole void a subtle sense of motion without it ever
+    // looking like the page is sliding.
+    const driftAmpX = Math.min(40, this.width * 0.025)
+    const driftAmpY = Math.min(28, this.height * 0.022)
+    this.driftX = Math.sin(this.elapsed * 0.11) * driftAmpX
+    this.driftY = Math.sin(this.elapsed * 0.083 + 1.2) * driftAmpY
+
+    // Rare ambient events.
+    this.maybeFireEvents()
+    for (let i = this.shootingStars.length - 1; i >= 0; i--) {
+      const ss = this.shootingStars[i]
+      ss.life += dt
+      ss.x += ss.vx * dt
+      ss.y += ss.vy * dt
+      if (ss.life >= ss.maxLife) this.shootingStars.splice(i, 1)
+    }
+
+    // Rocket particles.
     if (this.rocket.active && this.rocket.flame > 0.05) {
       const emit = Math.floor(this.rocket.flame * 4)
       for (let i = 0; i < emit; i++) {
         const sin = Math.sin(this.rocket.rotation)
         const cos = Math.cos(this.rocket.rotation)
-        // Engine is "behind" the rocket along its rotation axis.
         const ex = this.rocket.x - cos * 14 * this.rocket.scale
         const ey = this.rocket.y - sin * 14 * this.rocket.scale
         const spread = (Math.random() - 0.5) * 0.6
@@ -389,45 +647,38 @@ export class GalaxyRenderer implements RendererPublicAPI {
     }
   }
 
+  // ── Frame draw ──────────────────────────────────────────────────────────
+
   private draw(): void {
     const ctx = this.ctx
     const w = this.width
     const h = this.height
 
-    // 1. Background — warm radial gradient.
-    const grad = ctx.createRadialGradient(
-      w * 0.5,
-      h * 0.45,
-      0,
-      w * 0.5,
-      h * 0.45,
-      Math.max(w, h) * 0.75,
-    )
-    grad.addColorStop(0, '#1a0a24')
-    grad.addColorStop(0.5, '#0a0510')
-    grad.addColorStop(1, '#050208')
+    const camX = this.camera.shakeX + this.driftX
+    const camY = this.camera.shakeY + this.driftY
+
+    // 1. Background — static cool radial gradient, centered.
+    const gx = w * 0.5 + camX
+    const gy = h * 0.45 + camY
+    const grad = ctx.createRadialGradient(gx, gy, 0, gx, gy, Math.max(w, h) * 0.78)
+    grad.addColorStop(0, '#060d1a')
+    grad.addColorStop(0.5, '#02050c')
+    grad.addColorStop(1, '#000104')
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, w, h)
 
-    // Camera offsets — pointer parallax origin is screen center.
-    const px = (this.smoothedPointer.x - w / 2) * this.smoothedPointer.active
-    const py = (this.smoothedPointer.y - h / 2) * this.smoothedPointer.active
-    const cx = this.camera.shakeX
-    const cy = this.camera.shakeY
-    const boost = this.camera.parallaxBoost
-
-    // 2. Nebulae — drawn under the stars.
-    ctx.save()
+    // 2. Nebulae — no parallax, but pulse alpha boost from rare events.
     for (const n of this.nebulae) {
-      const nx = n.x * w + cx + px * 0.005 * boost
-      const ny = n.y * h + cy + py * 0.005 * boost
+      const nx = n.x * w + camX
+      const ny = n.y * h + camY
       const rx = n.rx * w
       const ry = n.ry * h
+      const pulseBoost = 1 + n.pulse * 1.8
       ctx.save()
       ctx.translate(nx, ny)
       ctx.rotate(n.rotation)
       const ngrad = ctx.createRadialGradient(0, 0, 0, 0, 0, Math.max(rx, ry))
-      ngrad.addColorStop(0, this.hexToRgba(n.color, n.alpha))
+      ngrad.addColorStop(0, this.hexToRgba(n.color, n.alpha * pulseBoost))
       ngrad.addColorStop(1, this.hexToRgba(n.color, 0))
       ctx.fillStyle = ngrad
       ctx.scale(rx / Math.max(rx, ry), ry / Math.max(rx, ry))
@@ -436,67 +687,119 @@ export class GalaxyRenderer implements RendererPublicAPI {
       ctx.fill()
       ctx.restore()
     }
-    ctx.restore()
 
-    // 3. Stars — by layer, deepest first.
-    for (let layer = 0; layer < this.quality.parallaxLayers; layer++) {
-      const depth = STAR_LAYER_DEPTH[layer] ?? STAR_LAYER_DEPTH[STAR_LAYER_DEPTH.length - 1]
-      const ox = -px * depth * boost + cx
-      const oy = -py * depth * boost + cy
-      for (const s of this.stars) {
-        if (s.layer !== layer) continue
-        const sx = s.x * w + ox
-        const sy = s.y * h + oy
-        if (sx < -10 || sy < -10 || sx > w + 10 || sy > h + 10) continue
-        const twinkle = 0.7 + Math.sin(s.twinklePhase) * 0.3
-        let alpha = s.baseAlpha * twinkle
+    // 3. Stars — drawn at base position (+ camera drift + tunnel offset).
+    //    During tunnel mode (parallaxBoost > 1), stars elongate into radial
+    //    streaks pointing away from the vanishing point.
+    const focusBoost = this.focusIntensity
+    const tunnelExcess = Math.max(0, this.camera.parallaxBoost - 1)
+    const tunnelActive = tunnelExcess > 0.05
+    const streakStrength = Math.min(1, tunnelExcess / 3.5)
 
-        // Focus reaction — brighten stars near the focus anchor.
-        if (this.focusIntensity > 0.01 && this.focusAnchor) {
-          const dx = sx - this.focusAnchor.x
-          const dy = sy - this.focusAnchor.y
-          const d = Math.hypot(dx, dy)
-          const falloff = Math.max(0, 1 - d / 320)
-          alpha = Math.min(1, alpha + falloff * this.focusIntensity * 0.6)
-        }
+    for (const s of this.stars) {
+      const sx = s.x * w + camX + s.tunnelOffsetX
+      const sy = s.y * h + camY + s.tunnelOffsetY
+      if (sx < -40 || sy < -40 || sx > w + 40 || sy > h + 40) continue
+      const twinkle = 0.7 + Math.sin(s.twinklePhase) * 0.3
+      let alpha = s.baseAlpha * twinkle
 
-        ctx.fillStyle = `rgba(245, 240, 234, ${alpha})`
+      // Focus glow brightening.
+      if (focusBoost > 0.01 && this.focusAnchor) {
+        const dx = sx - this.focusAnchor.x
+        const dy = sy - this.focusAnchor.y
+        const d = Math.hypot(dx, dy)
+        const fall = Math.max(0, 1 - d / 160)
+        alpha = Math.min(1, alpha + fall * focusBoost * 0.16)
+      }
+
+      if (tunnelActive) {
+        // Elongated streak from sx,sy outward (away from vp).
+        const dx = sx - this.vp.x
+        const dy = sy - this.vp.y
+        const d = Math.hypot(dx, dy) || 1
+        const ux = dx / d
+        const uy = dy / d
+        // Streak length scales with both boost and distance from VP
+        // (further stars streak more, like real warp).
+        const streakLen = streakStrength * Math.min(140, 18 + d * 0.18)
+        const tailX = sx + ux * streakLen
+        const tailY = sy + uy * streakLen
+        const grad2 = ctx.createLinearGradient(sx, sy, tailX, tailY)
+        grad2.addColorStop(0, `rgba(232, 236, 242, ${alpha})`)
+        grad2.addColorStop(1, 'rgba(232, 236, 242, 0)')
+        ctx.strokeStyle = grad2
+        ctx.lineWidth = Math.max(0.6, s.size * 0.9)
+        ctx.lineCap = 'round'
+        ctx.beginPath()
+        ctx.moveTo(sx, sy)
+        ctx.lineTo(tailX, tailY)
+        ctx.stroke()
+      } else {
+        ctx.fillStyle = `rgba(232, 236, 242, ${alpha})`
         ctx.beginPath()
         ctx.arc(sx, sy, s.size, 0, Math.PI * 2)
         ctx.fill()
       }
     }
 
-    // 4. Focus glow — a soft amber halo around the focus anchor.
-    if (this.focusIntensity > 0.01 && this.focusAnchor) {
+    // 4. Focus glow — input beacon.
+    if (focusBoost > 0.01 && this.focusAnchor) {
       const fg = ctx.createRadialGradient(
         this.focusAnchor.x,
         this.focusAnchor.y,
         0,
         this.focusAnchor.x,
         this.focusAnchor.y,
-        260,
+        140,
       )
-      fg.addColorStop(0, `rgba(255, 181, 71, ${0.07 * this.focusIntensity})`)
+      fg.addColorStop(0, `rgba(255, 181, 71, ${0.018 * focusBoost})`)
       fg.addColorStop(1, 'rgba(255, 181, 71, 0)')
       ctx.fillStyle = fg
       ctx.fillRect(0, 0, w, h)
     }
 
-    // 5. Rocket + particles.
+    // 6. Shooting stars (rare events). Streak with fading tail.
+    for (const ss of this.shootingStars) {
+      const t = ss.life / ss.maxLife
+      // Fade in/out envelope.
+      const env = Math.sin(Math.PI * t)
+      const speedMag = Math.hypot(ss.vx, ss.vy) || 1
+      const ux = ss.vx / speedMag
+      const uy = ss.vy / speedMag
+      const tailX = ss.x - ux * ss.length
+      const tailY = ss.y - uy * ss.length
+      const grad2 = ctx.createLinearGradient(ss.x, ss.y, tailX, tailY)
+      grad2.addColorStop(0, `rgba(255, 244, 214, ${env})`)
+      grad2.addColorStop(0.3, `rgba(255, 211, 128, ${env * 0.7})`)
+      grad2.addColorStop(1, 'rgba(255, 181, 71, 0)')
+      ctx.strokeStyle = grad2
+      ctx.lineWidth = 1.6
+      ctx.lineCap = 'round'
+      ctx.beginPath()
+      ctx.moveTo(tailX, tailY)
+      ctx.lineTo(ss.x, ss.y)
+      ctx.stroke()
+      // Bright head.
+      ctx.fillStyle = `rgba(255, 244, 214, ${env})`
+      ctx.beginPath()
+      ctx.arc(ss.x, ss.y, 1.6, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    // 7. Rocket + particles.
     if (this.rocket.active) {
-      // Particles (drawn behind the rocket).
+      ctx.save()
+      ctx.globalAlpha = this.rocket.alpha
       for (const p of this.rocketParticles) {
         const t = 1 - p.life / p.maxLife
-        const r = p.size * t
+        const r2 = p.size * t
         const a = t * 0.9
         ctx.fillStyle = `rgba(255, 181, 71, ${a})`
         ctx.beginPath()
-        ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+        ctx.arc(p.x, p.y, r2, 0, Math.PI * 2)
         ctx.fill()
       }
 
-      // Bloom halo around engine.
       if (this.rocket.bloom > 0) {
         const bg = ctx.createRadialGradient(
           this.rocket.x,
@@ -513,6 +816,7 @@ export class GalaxyRenderer implements RendererPublicAPI {
       }
 
       this.drawRocket()
+      ctx.restore()
     }
   }
 
@@ -520,10 +824,9 @@ export class GalaxyRenderer implements RendererPublicAPI {
     const ctx = this.ctx
     ctx.save()
     ctx.translate(this.rocket.x, this.rocket.y)
-    ctx.rotate(this.rocket.rotation + Math.PI / 2) // sprite faces "up" by default
+    ctx.rotate(this.rocket.rotation + Math.PI / 2)
     const s = this.rocket.scale
 
-    // Flame
     if (this.rocket.flame > 0) {
       const flameLen = 22 * this.rocket.flame * s
       const fg = ctx.createLinearGradient(0, 6 * s, 0, 6 * s + flameLen)
@@ -538,7 +841,6 @@ export class GalaxyRenderer implements RendererPublicAPI {
       ctx.fill()
     }
 
-    // Body
     ctx.fillStyle = '#f5f0ea'
     ctx.beginPath()
     ctx.moveTo(0, -14 * s)
@@ -548,13 +850,11 @@ export class GalaxyRenderer implements RendererPublicAPI {
     ctx.closePath()
     ctx.fill()
 
-    // Window
     ctx.fillStyle = '#ffb547'
     ctx.beginPath()
     ctx.arc(0, -4 * s, 2.4 * s, 0, Math.PI * 2)
     ctx.fill()
 
-    // Fins
     ctx.fillStyle = '#ffb547'
     ctx.beginPath()
     ctx.moveTo(-6 * s, 4 * s)
@@ -585,5 +885,4 @@ export function createRenderer(opts: RendererOptions): RendererPublicAPI {
   return new GalaxyRenderer(opts)
 }
 
-// Re-export the quality profile type for convenience.
 export type { QualityProfile }

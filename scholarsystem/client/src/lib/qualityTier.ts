@@ -17,15 +17,17 @@ export interface QualityProfile {
 export function detectQualityTier(): QualityProfile {
   const dpr = Math.min(window.devicePixelRatio || 1, 2)
   const cores = navigator.hardwareConcurrency || 4
-  const isMobile = /Mobi|Android/i.test(navigator.userAgent)
-  // Rough heuristic: low end of the market gets the small budget.
-  const isLow = isMobile && cores <= 4
+  const isMobile =
+    /Mobi|Android/i.test(navigator.userAgent) || window.matchMedia('(max-width: 768px)').matches
   const isHigh = !isMobile && cores >= 8
 
-  if (isLow) {
+  // Mobile always gets a sparse starfield — narrow viewports make the
+  // same density look 4× as crowded as on desktop, and the warm void
+  // should breathe.
+  if (isMobile) {
     return {
       tier: 'low',
-      starCount: 220,
+      starCount: 80,
       nebulaCount: 3,
       parallaxLayers: 2,
       enablePostFx: false,

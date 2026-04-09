@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   ACCEPT_ATTR,
   TOTAL_SIZE_LIMIT_BYTES,
@@ -16,6 +16,8 @@ const props = defineProps<{
    * is hidden so the renderer can take over from the same screen position.
    */
   launching?: boolean
+  /** Mobile mode disables the manual resize grip and tightens spacing. */
+  mobile?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -36,21 +38,82 @@ const canSubmit = computed(
   () => !props.launching && !overLimit.value && (props.modelValue.trim().length > 0 || props.files.length > 0),
 )
 
+// ── Auto-grow ────────────────────────────────────────────────────────────
+// Textarea grows with content up to its CSS max-height. If the user
+// manually drags the resize grip we stop auto-growing and let them drive,
+// until the textarea is emptied (then auto-grow re-engages).
+const manuallyResized = ref(false)
+/** Number of programmatic height changes that ResizeObserver hasn't seen yet. */
+let pendingProgrammaticResizes = 0
+
 function autoSize() {
   const el = textareaRef.value
-  if (!el) return
+  if (!el || manuallyResized.value) return
+  // Reset to auto so scrollHeight reflects true content height.
+  pendingProgrammaticResizes++
   el.style.height = 'auto'
-  el.style.height = `${Math.min(el.scrollHeight, 220)}px`
+  // Force reflow so scrollHeight is correct after the auto reset.
+  void el.offsetHeight
+  pendingProgrammaticResizes++
+  el.style.height = `${el.scrollHeight}px`
+}
+
+function onInput(e: Event) {
+  emit('update:modelValue', (e.target as HTMLTextAreaElement).value)
+  nextTick(autoSize)
 }
 
 watch(
   () => props.modelValue,
-  () => nextTick(autoSize),
+  (v) => {
+    if (v === '') {
+      // Reset manual override + collapse back to min-height.
+      manuallyResized.value = false
+      const el = textareaRef.value
+      if (el) {
+        pendingProgrammaticResizes++
+        el.style.height = ''
+      }
+    } else {
+      nextTick(autoSize)
+    }
+  },
 )
 
-function onInput(e: Event) {
-  emit('update:modelValue', (e.target as HTMLTextAreaElement).value)
-}
+let resizeObserver: ResizeObserver | null = null
+let lastObservedHeight = 0
+let observerPrimed = false
+onMounted(() => {
+  const el = textareaRef.value
+  if (!el) return
+  // Initial sizing in case there's already a value.
+  nextTick(autoSize)
+  resizeObserver = new ResizeObserver((entries) => {
+    const h = entries[0]?.contentRect.height ?? 0
+    // Skip the first synthetic callback ResizeObserver fires on observe().
+    if (!observerPrimed) {
+      observerPrimed = true
+      lastObservedHeight = h
+      return
+    }
+    // Programmatic changes are debited one-by-one as the observer sees them.
+    if (pendingProgrammaticResizes > 0) {
+      pendingProgrammaticResizes--
+      lastObservedHeight = h
+      return
+    }
+    // Any unaccounted-for height change = user dragged the grip.
+    if (Math.abs(h - lastObservedHeight) > 0.5) {
+      manuallyResized.value = true
+    }
+    lastObservedHeight = h
+  })
+  resizeObserver.observe(el)
+})
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+})
 
 function addFiles(incoming: File[]) {
   error.value = null
@@ -112,11 +175,14 @@ defineExpose({
   inputBoxRect(): DOMRect | null {
     return inputBoxRef.value?.getBoundingClientRect() ?? null
   },
+  inputBoxEl(): HTMLElement | null {
+    return inputBoxRef.value
+  },
 })
 </script>
 
 <template>
-  <div class="input-shell" :class="{ launching }">
+  <div class="input-shell" :class="{ launching, mobile }">
     <transition-group name="filechips" tag="div" class="file-chips" v-if="files.length">
       <FileChip
         v-for="(f, i) in files"
@@ -211,6 +277,18 @@ defineExpose({
   margin-inline: auto;
   transition: opacity 320ms ease;
 }
+@media (min-width: 1024px) {
+  .input-shell {
+    max-width: 880px;
+    gap: 18px;
+  }
+}
+@media (min-width: 1536px) {
+  .input-shell {
+    max-width: 1040px;
+    gap: 22px;
+  }
+}
 .input-shell.launching {
   opacity: 0.45;
   pointer-events: none;
@@ -224,57 +302,119 @@ defineExpose({
 .input-box {
   position: relative;
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  background: rgba(20, 8, 28, 0.55);
+  flex-direction: column;
+  background: rgba(8, 12, 22, 0.65);
   backdrop-filter: blur(14px);
-  border-radius: 16px;
-  padding: 14px 14px 14px 20px;
+  border: 1px solid var(--color-hairline-strong);
+  border-radius: 14px;
+  padding: 4px 6px 10px 6px;
   box-shadow:
-    0 0 0 1px rgba(255, 181, 71, 0.04),
-    0 30px 80px -30px rgba(255, 181, 71, 0.08),
-    0 0 60px -10px rgba(74, 29, 92, 0.4);
+    0 30px 80px -30px rgba(0, 0, 0, 0.6),
+    0 0 60px -10px rgba(10, 18, 32, 0.5);
   transition:
     box-shadow 320ms ease,
     border-color 240ms ease;
 }
 .input-box:focus-within {
+  border-color: rgba(255, 181, 71, 0.28);
   box-shadow:
-    0 0 0 1px rgba(255, 181, 71, 0.18),
-    0 30px 80px -30px rgba(255, 181, 71, 0.18),
-    0 0 80px -10px rgba(255, 181, 71, 0.12);
+    0 30px 80px -30px rgba(0, 0, 0, 0.6),
+    0 0 80px -10px rgba(255, 181, 71, 0.08);
 }
 
 textarea {
-  flex: 1;
+  display: block;
+  width: 100%;
   background: transparent;
   border: none;
   outline: none;
-  resize: none;
+  /* Allow the user to drag the bottom-right grip to grow the box. */
+  resize: vertical;
   color: var(--color-text-primary);
   font-family: var(--font-body);
   font-size: 1.05rem;
   font-weight: 400;
-  line-height: 1.5;
-  padding: 6px 0;
-  max-height: 220px;
+  line-height: 1.55;
+  padding: 14px 22px 14px 18px;
+  min-height: 96px;
+  max-height: 60vh;
   overflow-y: auto;
+  box-sizing: border-box;
+}
+@media (min-width: 1024px) {
+  textarea {
+    font-size: 1.2rem;
+    padding: 18px 26px 18px 22px;
+    min-height: 120px;
+    max-height: 65vh;
+  }
+}
+@media (min-width: 1536px) {
+  textarea {
+    font-size: 1.35rem;
+    padding: 22px 30px 22px 26px;
+    min-height: 140px;
+    max-height: 70vh;
+  }
 }
 textarea::placeholder {
   color: var(--color-text-muted);
   font-weight: 400;
 }
 
+/* Custom scrollbar — warm amber, hugs the right edge of the input box. */
+textarea {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 181, 71, 0.35) transparent;
+}
+textarea::-webkit-scrollbar {
+  width: 6px;
+}
+textarea::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 4px 0;
+}
+textarea::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 211, 128, 0.45),
+    rgba(255, 181, 71, 0.25)
+  );
+  border-radius: 999px;
+  border: 1px solid rgba(255, 181, 71, 0.15);
+}
+textarea::-webkit-resizer {
+  background-color: transparent;
+  background-image: linear-gradient(
+    135deg,
+    transparent 0%,
+    transparent 45%,
+    rgba(255, 181, 71, 0.45) 50%,
+    transparent 55%,
+    transparent 70%,
+    rgba(255, 181, 71, 0.3) 75%,
+    transparent 80%
+  );
+}
+textarea::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 211, 128, 0.7),
+    rgba(255, 181, 71, 0.5)
+  );
+}
+
 .actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
-  padding-bottom: 2px;
+  padding: 6px 8px 0 8px;
 }
 
 .icon-btn {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -298,8 +438,8 @@ textarea::placeholder {
 }
 
 .rocket-btn {
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -354,6 +494,60 @@ textarea::placeholder {
 .error {
   color: #ff8a65;
   font-weight: 500;
+}
+
+@media (min-width: 1024px) {
+  .icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+  .rocket-btn {
+    width: 50px;
+    height: 50px;
+  }
+  .rocket-btn :deep(svg) {
+    width: 24px;
+    height: 24px;
+  }
+  .icon-btn :deep(svg) {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+/* ── Mobile mode ───────────────────────────────────────────────────────── */
+.input-shell.mobile {
+  max-width: 100%;
+  gap: 10px;
+}
+.input-shell.mobile .input-box {
+  border-radius: 14px;
+  padding: 2px 4px 4px 4px;
+}
+.input-shell.mobile .actions {
+  padding: 2px 6px 0 6px;
+}
+.input-shell.mobile textarea {
+  resize: none;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  padding: 10px 16px 8px 16px;
+  min-height: 38px;
+  /* Cap to a fraction of viewport so it never grows to cover the screen. */
+  max-height: 32vh;
+}
+.input-shell.mobile .file-chips {
+  /* Horizontal-scrolling row instead of wrapping above the input. */
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+.input-shell.mobile .file-chips::-webkit-scrollbar {
+  display: none;
+}
+.input-shell.mobile .meta-row {
+  font-size: 0.66rem;
 }
 
 .filechips-enter-active,

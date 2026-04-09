@@ -1,15 +1,17 @@
 @import 'tailwindcss';
 
 @theme {
-  /* Warm purple void palette */
-  --color-void-base: #0a0510;
-  --color-void-center: #1a0a24;
-  --color-void-edge: #050208;
+  /* Deep cosmic palette — cool, dark, professional */
+  --color-void-base: #02040a;
+  --color-void-center: #050b18;
+  --color-void-edge: #000104;
 
-  --color-nebula-violet: #4a1d5c;
-  --color-nebula-rose: #6b2d3f;
-  --color-nebula-amber: #3d1a2e;
+  --color-nebula-1: #0e1828;
+  --color-nebula-2: #0a121f;
+  --color-nebula-3: #060c18;
+  --color-nebula-4: #101a2c;
 
+  /* Single warm accent — used sparingly for focal moments */
   --color-accent: #ffb547;
   --color-accent-glow: #ffd180;
 
@@ -17,10 +19,10 @@
   --color-flame-mid: #ffb547;
   --color-flame-tip: #ff6b35;
 
-  --color-text-primary: #f5f0ea;
-  --color-text-muted: #a89c92;
-  --color-hairline: rgba(245, 240, 234, 0.08);
-  --color-hairline-strong: rgba(245, 240, 234, 0.16);
+  --color-text-primary: #e8ecf2;
+  --color-text-muted: #6f7989;
+  --color-hairline: rgba(232, 236, 242, 0.06);
+  --color-hairline-strong: rgba(232, 236, 242, 0.13);
 
   --font-body: 'Nunito', system-ui, sans-serif;
   --font-ui: 'Space Grotesk', system-ui, sans-serif;
@@ -40,12 +42,12 @@ body,
 }
 
 body {
-  /* Subtle warm radial gradient sits behind the canvas as a fallback. */
+  /* Subtle cool radial gradient sits behind the canvas as a fallback. */
   background:
     radial-gradient(
       ellipse at 50% 45%,
       var(--color-void-center) 0%,
-      var(--color-void-base) 45%,
+      var(--color-void-base) 50%,
       var(--color-void-edge) 100%
     );
 }

@@ -28,7 +28,7 @@ const router = useRouter()
 }
 .card {
   max-width: 480px;
-  background: rgba(20, 8, 28, 0.6);
+  background: rgba(8, 12, 22, 0.7);
   backdrop-filter: blur(12px);
   border-radius: 16px;
   padding: 32px;
