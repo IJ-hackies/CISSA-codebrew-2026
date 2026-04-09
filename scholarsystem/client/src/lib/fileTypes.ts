@@ -1,6 +1,9 @@
 /**
  * Canonical accepted-file-type list. Frontend `accept` attribute, drop-zone
- * validator, and (eventually) backend ingest must mirror this exactly.
+ * validator, and backend ingest MUST mirror this exactly. The server-side
+ * source of truth is `server/src/pipeline/parsing/extract/types.ts` —
+ * `EXTENSION_TO_KIND`. Anything the client accepts that the server has no
+ * extractor for will be rejected at the route boundary with HTTP 415.
  *
  * If you add a type here, also add an extractor on the server side.
  */
@@ -9,17 +12,9 @@ export const ACCEPTED_EXTENSIONS = [
   '.txt',
   '.md',
   '.markdown',
-  '.rtf',
   '.pdf',
   '.docx',
-  '.html',
-  '.htm',
-  '.csv',
-  '.json',
   '.pptx',
-  '.epub',
-  '.tex',
-  '.ipynb',
 ] as const
 
 export type AcceptedExtension = (typeof ACCEPTED_EXTENSIONS)[number]

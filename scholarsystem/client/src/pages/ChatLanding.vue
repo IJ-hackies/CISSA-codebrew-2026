@@ -123,11 +123,14 @@ const MIN_CRUISE_MS = 2500
 async function handleSubmit(origin: { x: number; y: number }) {
   if (launching.value) return
 
-  // v1 backend only accepts text. Files are collected in the UI but ignored
-  // until PDF ingest lands.
+  // Accept any combination of: one or more attached files + pasted text.
+  // The backend concatenates everything into a single blob with per-file
+  // boundary headers, so Stage 1 can treat each file as a distinct topic
+  // cluster. At least one of (files, text) must be present.
   const trimmed = text.value.trim()
-  if (!trimmed) {
-    launchError.value = 'Type some text to launch (file uploads not wired yet).'
+  const allFiles = files.value.slice()
+  if (!trimmed && allFiles.length === 0) {
+    launchError.value = 'Type some text or attach a file to launch.'
     return
   }
 
@@ -140,9 +143,10 @@ async function handleSubmit(origin: { x: number; y: number }) {
     // Kick off the real pipeline call in parallel with the rocket launch
     // animation so cruise time overlaps network time.
     const pipelinePromise = createGalaxy({
-      text: trimmed,
+      text: trimmed || undefined,
       title: placeholderTitle.value,
-      filename: files.value[0]?.name ?? null,
+      files: allFiles.length > 0 ? allFiles : undefined,
+      filename: allFiles[0]?.name ?? null,
     })
 
     if (renderer) {

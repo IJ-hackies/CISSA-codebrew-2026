@@ -1,22 +1,18 @@
-# Scholar System
+## PLS READ OMG
 
-AI-powered learning platform that turns study material into an explorable galaxy — topics are solar systems, subtopics are planets, concepts are interactive scenes generated on demand by Claude.
-
-## PLS READ OMG  (yes claude wrote most of these)
-
-1. **Get context fast.** Run the `/recontext` skill in Claude Code. It reads `.context/ABOUT.md` and grounds Claude in what this project is, how the pipeline works, and the conventions we've agreed on.
-2. **Read `.context/ABOUT.md` yourself too.** It's the single source of truth for product vision, the four-stage content pipeline, visual system, API design, prompt engineering notes, and key design decisions. If something about the project isn't clear, the answer is probably in there.
+1. **Get context fast.** Run the `/recontext` skill in Claude Code. It reads the relevant context files. If you don't know anything about this project, run recontext then ask claude
+2. **Read `.context/ABOUT.md` yourself too.** Almost all details about this project and how it works is in there
 3. **`.claude/` and `.context/` live at the repo root.** All actual project code lives inside `scholarsystem/`.
-4. **When you finish a feature, tell Claude "update progress.md".** `.context/PROGRESS.md` is our living log of what's done across the four pipeline stages. Every time you land something meaningful (a stage checkbox, a branch merged, a feature working end-to-end), ask Claude to update it so the next person running `/recontext` sees the current state. Don't skip this — it's how we stay coherent when we're all working async.
+4. **When you finish a feature, tell Claude "update progress.md".** `.context/PROGRESS.md` is our living log of what's done across the four pipeline stages. You can also use `/reupdate` which does that too.
 
 ## Prerequisites
 
 Install these before you touch the code:
 
-- **[Bun](https://bun.sh/)** — our backend runtime. `curl -fsSL https://bun.sh/install | bash` (or the Windows installer). Check with `bun --version`.
-- **[Node.js](https://nodejs.org/)** (LTS) — needed for the Vue/Vite frontend tooling even though the backend uses Bun. Check with `node --version`.
-- **[Claude Code](https://docs.claude.com/en/docs/claude-code)** — the dev pipeline shells out to local Claude Code spawner scripts, so you need it installed and authenticated. Run `claude` once to log in before trying to run the content pipeline.
-- **Git** — obviously.
+- **[Bun](https://bun.sh/)**
+- **[Node.js](https://nodejs.org/)**
+- **[Claude Code](https://docs.claude.com/en/docs/claude-code)** 
+- **Git** 
 
 ## Tech stack
 
@@ -43,3 +39,17 @@ CISSA-codebrew-2026/
 ```
 
 Detailed per-file breakdown (every component, composable, pipeline stage, prompt file) is in `.context/ABOUT.md` under **Project Structure**.
+
+## Jorvan's updates
+- implemented working claude code spawner
+- implemented parser schema (structure can be found in schema.md)
+- parser now actually works but not fully refined and complete (stage 2/6)
+- parser speed is optimised, stage 2 runs in parallel in the background
+- frontend linked to the backend server, can test parser via frontend UI
+- implemented support for pdf, docx, pptx, md, markdown
+
+## Jorvan's todo
+- add image support (jpg, png, jpeg .etc)
+- finish up the parser (stage 3-6), may require frontend coordination
+- prepare proxy server (test and debug proxy deployment)
+- prepare deployment environment and domain
