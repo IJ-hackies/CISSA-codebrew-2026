@@ -1,0 +1,8 @@
+{
+  "name": "scholarsystem",
+  "private": true,
+  "workspaces": [
+    "server",
+    "shared"
+  ]
+}

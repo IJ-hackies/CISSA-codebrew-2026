@@ -11,11 +11,11 @@ import { useIsMobile } from '@/composables/useIsMobile'
 import { useVisualViewport } from '@/composables/useVisualViewport'
 import {
   addRecentGalaxy,
-  generateUuid,
   hasAnyRecentGalaxies,
   listRecentGalaxies,
   type GalaxyEntry,
 } from '@/lib/recentGalaxies'
+import { createGalaxy } from '@/lib/api'
 
 const router = useRouter()
 const isMobile = useIsMobile()
@@ -24,6 +24,7 @@ useVisualViewport()
 const text = ref('')
 const files = ref<File[]>([])
 const launching = ref(false)
+const launchError = ref<string | null>(null)
 const dropVisible = ref(false)
 const showSuggestions = ref(!hasAnyRecentGalaxies())
 const recents = ref<GalaxyEntry[]>(listRecentGalaxies())
@@ -168,43 +169,71 @@ const placeholderTitle = computed(() => {
   return 'Untitled galaxy'
 })
 
+// Minimum cruise duration so the rocket cinematic still reads even if the
+// pipeline returns faster than the animation. Real pipeline latency is
+// unbounded in v1 (sync POST /api/galaxy/create); if it exceeds this, the
+// cruise just waits on the network promise.
+const MIN_CRUISE_MS = 2500
+
 async function handleSubmit(origin: { x: number; y: number }) {
   if (launching.value) return
-  launching.value = true
 
-  const renderer = galaxyRendererRef.value?.getRenderer()
-  if (!renderer) {
-    // Renderer not ready — just create the entry and bail.
-    finalizeFakeGalaxy()
+  // Accept any combination of: one or more attached files + pasted text.
+  // The backend concatenates everything into a single blob with per-file
+  // boundary headers, so Stage 1 can treat each file as a distinct topic
+  // cluster. At least one of (files, text) must be present.
+  const trimmed = text.value.trim()
+  const allFiles = files.value.slice()
+  if (!trimmed && allFiles.length === 0) {
+    launchError.value = 'Type some text or attach a file to launch.'
     return
   }
 
-  // Tell the renderer where the DOM rocket lives so it can take over from
-  // the same screen position. (DOM button fades via .launching CSS class.)
-  await renderer.launchRocket(origin)
+  launching.value = true
+  launchError.value = null
 
-  // Cruise begins. In mockup mode we simulate Stage 1 with a fixed 3s
-  // timer. TODO: replace with a real "Stage 1 complete" signal from the
-  // SSE stream of POST /api/galaxy/create.
-  await new Promise((r) => setTimeout(r, 3000))
+  const renderer = galaxyRendererRef.value?.getRenderer()
 
-  await renderer.landRocket()
-  finalizeFakeGalaxy()
-}
+  try {
+    // Kick off the real pipeline call in parallel with the rocket launch
+    // animation so cruise time overlaps network time.
+    const pipelinePromise = createGalaxy({
+      text: trimmed || undefined,
+      title: placeholderTitle.value,
+      files: allFiles.length > 0 ? allFiles : undefined,
+      filename: allFiles[0]?.name ?? null,
+    })
 
-function finalizeFakeGalaxy() {
-  // TODO: this entire function is the mockup stand-in. Replace with the
-  // real galaxy UUID returned by POST /api/galaxy/create. The localStorage
-  // write stays — it's how the recent-galaxies strip stays in sync with
-  // what the user has explored.
-  const entry: GalaxyEntry = {
-    uuid: generateUuid(),
-    title: placeholderTitle.value,
-    createdAt: Date.now(),
+    if (renderer) {
+      // Tell the renderer where the DOM rocket lives so it can take over
+      // from the same screen position. (DOM button fades via .launching class.)
+      await renderer.launchRocket(origin)
+    }
+
+    // Wait for BOTH: the pipeline result and a minimum cruise feel.
+    const [galaxy] = await Promise.all([
+      pipelinePromise,
+      new Promise((r) => setTimeout(r, MIN_CRUISE_MS)),
+    ])
+
+    if (renderer) {
+      await renderer.landRocket()
+    }
+
+    const entry: GalaxyEntry = {
+      uuid: galaxy.meta.id,
+      title: galaxy.meta.title,
+      createdAt: Date.now(),
+    }
+    addRecentGalaxy(entry)
+    recents.value = listRecentGalaxies()
+    router.push(`/galaxy/${entry.uuid}`)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[chat-landing] launch failed:', message)
+    launchError.value = `Launch failed: ${message}`
+    launching.value = false
   }
-  addRecentGalaxy(entry)
-  recents.value = listRecentGalaxies()
-  router.push(`/galaxy/${entry.uuid}`)
 }
 </script>
 

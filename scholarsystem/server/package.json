@@ -3,13 +3,21 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "test:spawner": "bun run src/scripts/test-spawner.ts"
+    "dev": "bun --watch run src/index.ts",
+    "start": "bun run src/index.ts",
+    "test:spawner": "bun run src/scripts/test-spawner.ts",
+    "test:pipeline": "bun run src/scripts/test-pipeline.ts"
   },
   "dependencies": {
+    "hono": "^4.6.0",
+    "mammoth": "^1.12.0",
+    "officeparser": "^6.0.7",
+    "pdf-parse": "^2.4.5",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/pdf-parse": "^1.1.5",
     "typescript": "^5.5.0"
   }
 }

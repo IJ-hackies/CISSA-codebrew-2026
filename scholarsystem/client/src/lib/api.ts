@@ -1,0 +1,82 @@
+/**
+ * Thin fetch wrapper for the Scholar System backend API.
+ *
+ * Uses relative URLs — the Vite dev server proxies `/api/*` to the Bun
+ * backend (see vite.config.ts). In production the frontend is served by
+ * the same origin as the API, so relative URLs keep working.
+ */
+
+/**
+ * Minimal shape of what the frontend currently consumes from a Galaxy blob.
+ * The full schema lives in `shared/types/` — import from there once the
+ * client is wired to the workspace package. For now, keep a local surface
+ * type so ChatLanding can route off the real id/title.
+ */
+export interface GalaxyBlob {
+  meta: {
+    id: string
+    title: string
+    schemaVersion: number
+    createdAt: number
+    updatedAt: number
+  }
+  // Other scopes exist but aren't needed here yet.
+  [key: string]: unknown
+}
+
+export interface CreateGalaxyInput {
+  /** Pasted text. Optional — can be combined with files or sent alone. */
+  text?: string
+  title?: string
+  /** Uploaded files. When any are present, the request is sent as
+   *  multipart and every file plus the pasted text is concatenated into
+   *  a single blob server-side (Option A — boundary-header concat). */
+  files?: File[]
+  /** Legacy — only used on the pure-paste path when no files are attached. */
+  filename?: string | null
+}
+
+export async function createGalaxy(input: CreateGalaxyInput): Promise<GalaxyBlob> {
+  const hasFiles = (input.files?.length ?? 0) > 0
+  let res: Response
+  if (hasFiles) {
+    // Multipart path: N files + optional title + optional text fallback.
+    // The server merges everything into one blob with `# <filename>`
+    // boundary markers before Stage 0.
+    const form = new FormData()
+    for (const f of input.files!) form.append('file', f, f.name)
+    if (input.title) form.append('title', input.title)
+    if (input.text) form.append('text', input.text)
+    res = await fetch('/api/galaxy/create', { method: 'POST', body: form })
+  } else {
+    // JSON paste path unchanged.
+    res = await fetch('/api/galaxy/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: input.text,
+        title: input.title,
+        filename: input.filename,
+      }),
+    })
+  }
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`
+    try {
+      const err = (await res.json()) as { error?: string; message?: string }
+      detail = err.message ?? err.error ?? detail
+    } catch {
+      // non-JSON error body — fall through with status
+    }
+    throw new Error(detail)
+  }
+  return (await res.json()) as GalaxyBlob
+}
+
+export async function getGalaxy(id: string): Promise<GalaxyBlob> {
+  const res = await fetch(`/api/galaxy/${encodeURIComponent(id)}`)
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`)
+  }
+  return (await res.json()) as GalaxyBlob
+}

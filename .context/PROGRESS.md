@@ -19,16 +19,20 @@ Status: **in progress** (mockup mode, fake submit, localStorage scaffolding)
 - [ ] **Stubbed** — `Renderer.setPointer()` still on public API but no longer consumed (calmer ambient model — kept for forward compatibility)
 
 ### Stage 1 — Ingest & Structure
-Status: **not started**
-- [ ] PDF/text ingest (`pdf-parse`)
-- [ ] Structural analysis prompt (knowledge tree JSON)
-- [ ] Two-pass parallel detail extraction for large inputs
+Status: **text path in progress** (PDFs + parallel detail still TBD)
+- [x] Text ingest (hash, excerpt, blank blob) — `pipeline/parsing/ingest.ts`
+- [x] Structural analysis prompt + orchestrator (knowledge + relationships, referential integrity check) — `pipeline/parsing/structure.ts`, `prompts/parsing/structure.ts`
+- [x] Multi-format ingest (.txt, .md, .markdown, .pdf, .docx, .pptx) via extractor dispatcher — `pipeline/parsing/extract/`
+- [x] Stage 2 detail extraction with per-topic parallel fan-out (runs in background from HTTP route; foreground in CLI harness) — `pipeline/parsing/detail.ts`, `prompts/parsing/detail.ts`
+- [ ] Source-text chunking for very large inputs (today every chunk re-sends the full raw text)
 
 ### Stage 2 — Galaxy Generation
-Status: **not started**
-- [ ] Force-directed layout of systems/planets
-- [ ] Claude-assigned visual parameters per body
-- [ ] Serialize galaxy JSON + store in SQLite by UUID
+Status: **layout done, visuals pending**
+- [x] Deterministic concentric layout of systems/planets/moons/asteroids (v1, pure code) — `pipeline/worldgen/layout.ts`
+- [x] SQLite key-value store + round-trip validation — `db/store.ts`
+- [x] `POST /api/galaxy/create` runs ingest → structure → layout end-to-end and persists — `routes/galaxy.ts`
+- [ ] Upgrade layout v1 → force-directed pass
+- [ ] Claude-assigned visual parameters per body (Stage 5)
 
 ### Stage 3 — Scene Generation (On-Demand)
 Status: **not started**

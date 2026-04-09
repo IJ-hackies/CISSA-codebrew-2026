@@ -8,6 +8,7 @@ export * from "./narrative";
 export * from "./spatial";
 export * from "./visuals";
 export * from "./scenes";
+export * from "./conversations";
 export * from "./progress";
 export * from "./pipeline";
 export * from "./galaxy";
