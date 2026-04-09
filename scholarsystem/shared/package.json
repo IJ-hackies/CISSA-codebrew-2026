@@ -1,0 +1,8 @@
+{
+  "name": "@scholarsystem/shared",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "zod": "^3.23.8"
+  }
+}

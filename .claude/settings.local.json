@@ -3,7 +3,11 @@
     "allow": [
       "Bash(mkdir -p scholarsystem)",
       "Bash(mv client:*)",
-      "Bash(git -C scholarsystem status -s)"
+      "Bash(git -C scholarsystem status -s)",
+      "Bash(git fetch:*)",
+      "Bash(git pull:*)",
+      "Bash(git checkout:*)",
+      "Bash(git stash:*)"
     ]
   }
 }

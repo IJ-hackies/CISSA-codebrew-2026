@@ -40,6 +40,9 @@ Status: **not started** (development uses local Claude Code spawner scripts unti
 
 _Append newest entries at the top. Format: `YYYY-MM-DD — what landed — branch/PR`._
 
+- 2026-04-09 — made `scholarsystem/` a Bun workspace root (`scholarsystem/package.json` + `shared/package.json`) so `shared/` can resolve its own `zod` via hoisted root `node_modules`; `bun install` now runs from workspace root, not `server/` — main
+- 2026-04-09 — reorganised `server/src/` into phase-grouped pipeline (parsing/storyline/worldgen/gameplay), added `server/src/README.md` + `pipeline/README.md` + `shared/README.md` as teammate navigation docs — main
+- 2026-04-09 — landed sample galaxy fixture (`server/src/fixtures/sample-galaxy.ts`) + minimal Hono server serving `GET /api/galaxy/:id` from the fixture, so the frontend branch has a real Galaxy shape to render against before the pipeline is built — main
 - 2026-04-09 — landed canonical galaxy schema as Zod in `shared/types/` (11 scopes: meta, source, knowledge, detail, relationships, narrative, spatial, visuals, scenes, progress, pipeline); full design rationale in `.context/SCHEMA.md` — main
 - 2026-04-09 — Claude Code spawner + smoke-test script in `server/src/lib/spawner.ts` and `server/src/scripts/test-spawner.ts` — main
 - 2026-04-09 — scaffolded `scholarsystem/` project folder with client/server/shared subtree per ABOUT.md — main
