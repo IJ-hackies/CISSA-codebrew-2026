@@ -259,8 +259,11 @@ The model used per scene is selected from the concept's `modelTier` hint — `li
 
 ## Project Structure
 
+`scholarsystem/` is a Bun workspace root — dependencies install once from the top and hoist into `scholarsystem/node_modules`, so `shared/` and `server/` both resolve `zod` from the same place without needing their own installs.
+
 ```
 scholarsystem/
+├── package.json                # Workspace root (declares server + shared)
 ├── client/                     # Vue 3 frontend
 │   ├── src/
 │   │   ├── components/
@@ -295,32 +298,43 @@ scholarsystem/
 │   │   │   ├── galaxy.ts             # Galaxy CRUD endpoints
 │   │   │   ├── scene.ts              # Scene generation endpoint
 │   │   │   └── upload.ts             # File upload handling
-│   │   ├── pipeline/
-│   │   │   ├── ingest.ts             # Stage 0: PDF/text extraction, hashing, blob init
-│   │   │   ├── structure.ts          # Stage 1: structural analysis (knowledge + relationships)
-│   │   │   ├── detail.ts             # Stage 2: parallel per-concept detail extraction
-│   │   │   ├── narrative.ts          # Stage 3: galaxy-wide story spine
-│   │   │   ├── layout.ts             # Stage 4: deterministic force-directed layout
-│   │   │   ├── visuals.ts            # Stage 5: per-body theming (Claude + procedural)
-│   │   │   └── scene.ts              # Stage 6: on-demand per-concept scene generation
-│   │   ├── prompts/
-│   │   │   ├── structure.ts          # Structural analysis prompt
-│   │   │   ├── detail.ts             # Detail extraction prompt
-│   │   │   ├── narrative.ts          # Narrative spine prompt
-│   │   │   ├── visuals.ts            # Visual parameter prompt
-│   │   │   └── scene.ts              # Scene generation prompt
+│   │   ├── pipeline/                 # Content engine, grouped by phase
+│   │   │   ├── README.md             # Stage order, phase grouping, rules
+│   │   │   ├── parsing/              # Stages 0-2: input → knowledge
+│   │   │   │   ├── ingest.ts         # Stage 0: PDF/text extract, hash, init blob
+│   │   │   │   ├── structure.ts      # Stage 1: hierarchical knowledge + relationships
+│   │   │   │   └── detail.ts         # Stage 2: parallel per-concept detail extraction
+│   │   │   ├── storyline/            # Stage 3: narrative spine
+│   │   │   │   └── narrative.ts      # Stage 3: galaxy-wide story, arc beats, cast
+│   │   │   ├── worldgen/             # Stages 4-5: building the game world
+│   │   │   │   ├── layout.ts         # Stage 4: force-directed spatial layout
+│   │   │   │   └── visuals.ts        # Stage 5: per-body theming
+│   │   │   └── gameplay/             # Stage 6: interactive content
+│   │   │       └── scene.ts          # Stage 6: on-demand per-concept scene gen
+│   │   ├── prompts/                  # Claude prompts — MIRRORS pipeline/ structure
+│   │   │   ├── parsing/              # structure.ts, detail.ts
+│   │   │   ├── storyline/            # narrative.ts
+│   │   │   ├── worldgen/             # visuals.ts
+│   │   │   └── gameplay/             # scene.ts
 │   │   ├── db/
 │   │   │   └── store.ts              # SQLite key-value operations
 │   │   ├── lib/
 │   │   │   ├── spawner.ts            # Local Claude Code spawner (dev) — proxy client later
 │   │   │   └── parallel.ts           # Parallel detail-extraction orchestrator
+│   │   ├── fixtures/
+│   │   │   └── sample-galaxy.ts      # Valid Galaxy fixture, validated at import
 │   │   ├── scripts/
 │   │   │   └── test-spawner.ts       # Smoke test for the spawner
-│   │   └── index.ts                  # Server entry point
+│   │   ├── routes/
+│   │   │   └── galaxy.ts             # GET /api/galaxy/:id
+│   │   ├── README.md                 # Navigation guide for teammates
+│   │   └── index.ts                  # Hono server entry point
 │   ├── tsconfig.json
 │   └── package.json
 │
-├── shared/                     # Shared Zod schemas + derived TS types
+├── shared/                     # Shared Zod schemas + derived TS types (workspace member)
+│   ├── package.json            # Declares zod dep — hoisted to workspace root
+│   ├── README.md
 │   └── types/                  # Source of truth for the Galaxy data contract
 │       ├── ids.ts                     # Slug validator (kebab-case id discipline)
 │       ├── meta.ts                    # id, schemaVersion, timestamps, title

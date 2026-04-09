@@ -1,1 +1,4 @@
 terminals.bat
+scholarsystem/node_modules/
+scholarsystem/server/node_modules/
+scholarsystem/shared/node_modules/
