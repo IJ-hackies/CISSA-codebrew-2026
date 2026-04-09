@@ -754,6 +754,8 @@ const raw = {
 
   scenes: {},
 
+  conversations: {},
+
   progress: {
     bodies: {},
     totalBodies: 9,

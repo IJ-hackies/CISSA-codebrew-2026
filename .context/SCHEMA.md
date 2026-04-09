@@ -4,7 +4,7 @@ The canonical data contract for Scholar System. Everything the pipeline produces
 
 Source of truth: `scholarsystem/shared/types/` (Zod). TypeScript types are derived via `z.infer` — never hand-write types that duplicate the Zod schemas.
 
-## The 11 scopes
+## The 12 scopes
 
 | # | Scope | Produced by | Holds |
 |---|---|---|---|
@@ -17,8 +17,9 @@ Source of truth: `scholarsystem/shared/types/` (Zod). TypeScript types are deriv
 | 7 | `spatial` | Stage 4 (layout) | polymorphic body layout, discriminated by `kind` |
 | 8 | `visuals` | Stage 5 | per-body visual params, discriminated union by body kind |
 | 9 | `scenes` | On-demand | per-concept cached interactive scenes, keyed by body id |
-| 10 | `progress` | User interaction | per-body mastery state + aggregates |
-| 11 | `pipeline` | Every stage | per-stage status for the streaming UI |
+| 10 | `conversations` | On-demand (reserved) | per-body player↔NPC chat turns, keyed by body id. Scope reserved in schema; chat feature not yet implemented |
+| 11 | `progress` | User interaction | per-body mastery state + aggregates |
+| 12 | `pipeline` | Every stage | per-stage status for the streaming UI |
 
 ## Pipeline stage order
 
@@ -63,7 +64,7 @@ Every id across every scope is a **kebab-case slug** (`^[a-z][a-z0-9-]*$`), vali
 Different scopes have different mutability contracts. Enforce these in code, not just docs.
 
 - **Write-once** (to change: regenerate the whole galaxy): `meta.id`, `meta.createdAt`, `source`, `knowledge`, `detail`, `relationships`, `narrative`, `spatial`, `visuals`
-- **Append-only**: `scenes` (once generated for a body, never mutated)
+- **Append-only**: `scenes` (once generated for a body, never mutated), `conversations` (turns appended, never rewritten)
 - **Mutable**: `progress`, `pipeline`, `meta.updatedAt`, `meta.title`
 
 If progress writes ever become hot, it's the clean split point for moving off single-blob storage — the scope boundary is already isolated.
@@ -73,7 +74,7 @@ If progress writes ever become hot, it's the clean split point for moving off si
 **The blob must be loadable and renderable at every intermediate pipeline state.** Frontend must not assume any scope beyond `meta` + `source` + `pipeline` is populated. Rules:
 
 - `knowledge`, `narrative`, `spatial` are nullable — null means "not yet produced."
-- `detail`, `visuals`, `scenes` default to empty objects `{}` when the stage hasn't run.
+- `detail`, `visuals`, `scenes`, `conversations` default to empty objects `{}` when the stage hasn't run (or, for `conversations`, when the user hasn't chatted in any scene yet).
 - `relationships` defaults to empty array `[]`.
 - `progress` starts with zeroed aggregates and an empty `bodies` record.
 - `pipeline` starts with every stage in `"pending"` status.

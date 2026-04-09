@@ -8,6 +8,7 @@ import { Narrative } from "./narrative";
 import { Spatial } from "./spatial";
 import { Visuals } from "./visuals";
 import { Scenes } from "./scenes";
+import { Conversations } from "./conversations";
 import { Progress } from "./progress";
 import { Pipeline } from "./pipeline";
 
@@ -20,7 +21,7 @@ import { Pipeline } from "./pipeline";
 // Mutability zones:
 //   write-once: meta.id/createdAt, source, knowledge, detail,
 //               relationships, narrative, spatial, visuals
-//   append-only: scenes
+//   append-only: scenes, conversations (turns appended, never mutated)
 //   mutable:    progress, pipeline, meta.updatedAt, meta.title
 export const Galaxy = z.object({
   meta: Meta,
@@ -32,6 +33,7 @@ export const Galaxy = z.object({
   spatial: Spatial.nullable(),       // Stage 4
   visuals: Visuals,                   // Stage 5 — starts {}
   scenes: Scenes,                     // on-demand — starts {}
+  conversations: Conversations,       // on-demand — starts {} (reserved; chat not yet implemented)
   progress: Progress,                 // mutable throughout
   pipeline: Pipeline,
 });
