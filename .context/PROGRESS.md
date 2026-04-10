@@ -18,39 +18,54 @@ Status: **in progress** (mockup mode, fake submit, localStorage scaffolding)
 - [ ] **Stubbed** — WebGL post-fx (grain/bloom/god-rays); quality flag wired, implementation deferred
 - [ ] **Stubbed** — `Renderer.setPointer()` still on public API but no longer consumed (calmer ambient model — kept for forward compatibility)
 
-### Stage 1 — Ingest & Structure
-Status: **text path in progress** (PDFs + parallel detail still TBD)
-- [x] Text ingest (hash, excerpt, blank blob) — `pipeline/parsing/ingest.ts`
-- [x] Structural analysis prompt + orchestrator (knowledge + relationships, referential integrity check) — `pipeline/parsing/structure.ts`, `prompts/parsing/structure.ts`
-- [x] Multi-format ingest (.txt, .md, .markdown, .pdf, .docx, .pptx) via extractor dispatcher — `pipeline/parsing/extract/`
-- [x] Stage 2 detail extraction with per-topic parallel fan-out (runs in background from HTTP route; foreground in CLI harness) — `pipeline/parsing/detail.ts`, `prompts/parsing/detail.ts`
-- [ ] Source-text chunking for very large inputs (today every chunk re-sends the full raw text)
+### Backend v2 — Workspace Proxy + Obsidian Markdown Rewrite
+Status: **design locked, implementation not started** — supersedes the earlier spawner + TAB-delimited Stage 1 + in-memory Stage 2 approach. The prior backend work under `server/src/pipeline/parsing/` (ingest, structure, detail, extractors) and `pipeline/worldgen/layout.ts` is being superseded; extractor dispatch + the SQLite store carry over, everything else is rebuilt.
 
-### Stage 2 — Galaxy Generation
-Status: **layout done, visuals pending**
-- [x] Deterministic concentric layout of systems/planets/moons/asteroids (v1, pure code) — `pipeline/worldgen/layout.ts`
-- [x] SQLite key-value store + round-trip validation — `db/store.ts`
-- [x] `POST /api/galaxy/create` runs ingest → structure → layout end-to-end and persists — `routes/galaxy.ts`
-- [ ] Upgrade layout v1 → force-directed pass
-- [ ] Claude-assigned visual parameters per body (Stage 5)
+**Schema changes (do first — blocks everything else):**
+- [ ] `source.chapters[].units[]` — stable numbered source units (`w1-s-0001`), immutable once written
+- [ ] `meta.chapters[]` — upload history (`id`, `uploadedAt`, `filename`, `addedKnowledgeIds`, `addedBodyIds`)
+- [ ] `narrative.canon` vs `narrative.arcs[]` split — canon frozen after first generation, arcs append per chapter
+- [ ] `sourceRefs: Slug[]` with `.min(1)` on every `knowledge` node, `detail` entry, and `relationships` edge
+- [ ] `Slug` schema extended to require chapter prefix (`^[a-z][a-z0-9]*-[a-z][a-z0-9-]*$`)
+- [ ] Mutability table updated: append-only (not write-once) for `knowledge`, `detail`, `relationships`, `spatial`, `visuals`; position-lock on `spatial.bodies[].position`
 
-### Stage 3 — Scene Generation (On-Demand)
-Status: **not started**
-- [ ] Scene generation prompt + archetype rotation
+**Workspace proxy (`scholarsystem/proxy/`):**
+- [ ] HTTP+SSE Hono server, VPS-deployable
+- [ ] Worker pool of long-running Claude Code processes with concurrency cap
+- [ ] Per-galaxy workspace directories (`workspaces/<galaxyId>/`) with stage subfolders
+- [ ] Endpoints: `POST /session/:id/files`, `POST /session/:id/run`, `GET /session/:id/compile`, `DELETE /session/:id`
+- [ ] Rehydration: given a stored blob, reconstruct the workspace for chapter extensions
+- [ ] TTL-based idle cleanup; per-session single-writer lock
+- [ ] Proxy-client library for the API server (`server/src/lib/proxy-client.ts`), replacing `spawner.ts`
+
+**API server pipeline rewrite (`scholarsystem/server/`):**
+- [ ] Stage 0 chunker — pure code, `pipeline/chunker.ts`, produces numbered source units per chapter
+- [ ] Stage 1 structure prompt — Obsidian markdown output to `stage1-structure/`, wikilink-based relationships
+- [ ] Stage 2 detail prompt — per-topic parallel sandboxes (`stage2-detail/<topic-id>/`), per-concept markdown notes with frontmatter + `sourceRefs`
+- [ ] Stage 2.5 coverage auditor — pure-code uncited-unit diff + targeted gap-audit Claude call loop
+- [ ] Stage 3 narrative — canon writer (first-run) + arc extender (chapter mode)
+- [ ] Stage 4 layout v1 — extension-aware concentric placement with position locks
+- [ ] Stage 5 visuals — append-only per-body params from `narrative.canon`
+- [ ] Compile step — folder → Galaxy blob via `gray-matter` frontmatter parser + wikilink walker + Zod validation
+- [ ] Pipeline orchestrator driving the proxy stage-by-stage with status writes into `pipeline[stage].status`
+- [ ] `POST /api/galaxy/create` — first-chapter path
+- [ ] `POST /api/galaxy/:id/extend` — chapter extension path (rehydrate workspace, run delta stages only)
+
+**Stage 6 — Scene Generation (On-Demand):**
+- [ ] Scene prompt + archetype rotation
 - [ ] Streamed scene delivery (SSE) to frontend
 - [ ] Procedural SVG scene compositor + parallax layers
+- [ ] Per-concept `modelTier` routing (Haiku/Sonnet/Opus)
 
-### Stage 4 — Progress Tracking
-Status: **not started**
-- [ ] Visited/challenge/score state in galaxy JSON
+**Progress tracking:**
+- [ ] Visited/challenge/score state already scoped in schema
 - [ ] `PATCH /api/galaxy/:id/progress` endpoint
 - [ ] Feedback loop into scene generation (reinforce weak concepts)
 
-### Pre-deployment — Claude Code Proxy Migration
-Status: **not started** (development uses local Claude Code spawner scripts until this lands)
-- [ ] Stand up proxy server wrapping a long-running Claude Code instance
-- [ ] Expose HTTP + SSE endpoints mirroring the spawner's request/response shape
-- [ ] Swap backend pipeline adapter from spawner → proxy client
+---
+
+### Superseded (prior backend, kept as reference during rewrite)
+- Stages 0/1/2/4 previously wired via `server/src/lib/spawner.ts` + TAB-delimited Stage 1 output. Extractor dispatcher (`pipeline/parsing/extract/`) and SQLite store (`db/store.ts`) carry over; Stage 1/2 prompts and orchestration are rewritten for the Obsidian workspace model.
 
 ---
 
@@ -58,6 +73,7 @@ Status: **not started** (development uses local Claude Code spawner scripts unti
 
 _Append newest entries at the top. Format: `YYYY-MM-DD — what landed — branch/PR`._
 
+- 2026-04-10 — backend architecture locked to **workspace-proxy + Obsidian markdown** model: Claude Code operates on per-galaxy workspace directories on a VPS proxy, stages read/write frontmatter+wikilink markdown notes, compile step walks folders into the Galaxy blob. Accuracy guarantee via stable source-unit chunks + mandatory `sourceRefs` citations + pure-code coverage auditor + targeted gap-audit Claude call. Chapter extensions first-class: `meta.chapters[]`, frozen `narrative.canon` + extendable `narrative.arcs[]`, position-locked layout, append-only mutability. Chapter-prefixed slugs enforced in `Slug` Zod schema. Sonnet 4.6 default across Stages 1–5; Opus/Haiku only in Stage 6 via `modelTier`. Supersedes prior spawner + TAB-delimited approach. Context files updated — `.context/`
 - 2026-04-10 — black-hole launch sequence replaces straight-up rocket: 5-phase cinematic (VP slide → entry spiral → steady-state hold ≥3s → shrink → fade) with tunnel-of-stars (radial streaks + inward acceleration + wrap), tangent-aligned spiraling rocket, stage gets sucked into the void via `.launching` scale-down/blur/fade. `parallaxBoost` repurposed as the unified tunnel-intensity knob that now also visibly drives `warp()` and `zoomOut()`/`zoomIn()` — feat/chat-page
 - 2026-04-10 — palette swap: warm purple void → deep cosmic dark navy/black, cooler nebula palette, cool off-white text, refined tagline weight/sizing, more letterspacing on the wordmark — feat/chat-page
 - 2026-04-10 — chat landing iteration: removed cursor parallax/light entirely (calmer ambient model), tightened input glow, added Lissajous ambient camera drift, added tagline + keyboard hint line + supported-formats footer, added `SCHOLAR SYSTEM` wordmark beside the logo — feat/chat-page
