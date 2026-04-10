@@ -32,6 +32,56 @@ const rocketBtnRef = ref<HTMLButtonElement | null>(null)
 const inputBoxRef = ref<HTMLDivElement | null>(null)
 const error = ref<string | null>(null)
 
+// ── Custom resize grip ───────────────────────────────────────────────────
+// Incremental-delta approach: each mousemove applies only the delta since the
+// last event. This is immune to layout reflow (e.g. a centred flex container
+// shifting upward as the textarea grows) because we never compare against a
+// fixed start position — we only ever add the per-frame step.
+let lastDragY = 0
+
+function startResize(e: MouseEvent) {
+  const el = textareaRef.value
+  if (!el) return
+  e.preventDefault()
+  lastDragY = e.clientY
+  // Ensure el.style.height is set so onResizeMove always has a numeric base.
+  if (!el.style.height) {
+    const cs = getComputedStyle(el)
+    el.style.height = cs.boxSizing === 'border-box'
+      ? `${el.offsetHeight}px`
+      : `${el.offsetHeight
+          - parseFloat(cs.paddingTop)   - parseFloat(cs.paddingBottom)
+          - parseFloat(cs.borderTopWidth) - parseFloat(cs.borderBottomWidth)}px`
+  }
+  manuallyResized.value = true
+  document.addEventListener('mousemove', onResizeMove)
+  document.addEventListener('mouseup', stopResize)
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'ns-resize'
+}
+
+function onResizeMove(e: MouseEvent) {
+  const el = textareaRef.value
+  if (!el) return
+  const delta = e.clientY - lastDragY
+  lastDragY = e.clientY
+  const cs = getComputedStyle(el)
+  const minH = parseFloat(cs.minHeight) || 64
+  const maxH = window.innerHeight * 0.4
+  const current = parseFloat(el.style.height)
+  // The stage uses justify-content:center — growing the textarea by X shifts
+  // the whole block up by X/2, so the grip only moves X/2. Applying delta*2
+  // makes the grip move exactly delta, keeping it locked under the cursor.
+  el.style.height = `${Math.min(maxH, Math.max(minH, current + delta * 2))}px`
+}
+
+function stopResize() {
+  document.removeEventListener('mousemove', onResizeMove)
+  document.removeEventListener('mouseup', stopResize)
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+}
+
 const totalBytes = computed(() => props.files.reduce((acc, f) => acc + f.size, 0))
 const overLimit = computed(() => totalBytes.value > TOTAL_SIZE_LIMIT_BYTES)
 const canSubmit = computed(
@@ -113,6 +163,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   resizeObserver = null
+  stopResize()
 })
 
 function addFiles(incoming: File[]) {
@@ -199,9 +250,10 @@ defineExpose({
         @input="onInput"
         @keydown="onKeydown"
         rows="1"
-        placeholder="Drop your notes, or describe what you want to learn"
+        placeholder="Describe a memory, a chapter of your life, or a time you want to preserve…"
         spellcheck="false"
       />
+      <div v-if="!mobile" class="resize-grip" @mousedown="startResize" />
 
       <div class="actions">
         <button
@@ -328,8 +380,7 @@ textarea {
   background: transparent;
   border: none;
   outline: none;
-  /* Allow the user to drag the bottom-right grip to grow the box. */
-  resize: vertical;
+  resize: none;
   color: var(--color-text-primary);
   font-family: var(--font-body);
   font-size: 0.88rem;
@@ -337,7 +388,7 @@ textarea {
   line-height: 1.5;
   padding: 10px 16px 10px 14px;
   min-height: 64px;
-  max-height: 50vh;
+  max-height: 40vh;
   overflow-y: auto;
   box-sizing: border-box;
 }
@@ -346,7 +397,7 @@ textarea {
     font-size: 0.92rem;
     padding: 12px 18px 12px 16px;
     min-height: 72px;
-    max-height: 55vh;
+    max-height: 40vh;
   }
 }
 @media (min-width: 1536px) {
@@ -354,7 +405,7 @@ textarea {
     font-size: 0.95rem;
     padding: 14px 20px 14px 18px;
     min-height: 80px;
-    max-height: 55vh;
+    max-height: 40vh;
   }
 }
 textarea::placeholder {
@@ -383,18 +434,29 @@ textarea::-webkit-scrollbar-thumb {
   border-radius: 999px;
   border: 1px solid rgba(255, 181, 71, 0.15);
 }
-textarea::-webkit-resizer {
-  background-color: transparent;
-  background-image: linear-gradient(
-    135deg,
-    transparent 0%,
-    transparent 45%,
-    rgba(255, 181, 71, 0.45) 50%,
-    transparent 55%,
-    transparent 70%,
-    rgba(255, 181, 71, 0.3) 75%,
-    transparent 80%
-  );
+.resize-grip {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 36px;
+  height: 14px;
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.resize-grip::before {
+  content: '';
+  display: block;
+  width: 28px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 181, 71, 0.18);
+  transition: background 200ms ease;
+}
+.resize-grip:hover::before {
+  background: rgba(255, 181, 71, 0.45);
 }
 textarea::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(

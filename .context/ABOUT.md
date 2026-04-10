@@ -4,7 +4,7 @@
 
 ## What Is This?
 
-Scholar System is an AI-powered knowledge organizer that transforms any body of information — a year of journal entries, historical texts, photo archives, text message exports, lecture notes — into a navigable 3D galaxy where every node is a wrap.
+Scholar System is an AI-powered memory bank that transforms any body of personal information — a year of journal entries, life events, relationships, places, milestones — into a navigable 3D galaxy where every node is a wrap.
 
 **Think:** Claude builds you an entire Obsidian vault from a single upload, wraps every node like Spotify Wrapped, then you explore it as a 3D cosmos.
 
