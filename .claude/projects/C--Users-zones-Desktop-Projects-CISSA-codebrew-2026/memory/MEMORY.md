@@ -1,0 +1,1 @@
+- [Stage 1 & 2 rewrite by teammate](project_stage1_stage2_rewrite.md) — teammate building enhanced Stage 1/2 with skill/instructions-md system; current stages are temporary

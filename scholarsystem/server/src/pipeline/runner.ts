@@ -11,18 +11,23 @@
 //     4. Layout         — deterministic spatial placement              (pure code)
 //
 //   BACKGROUND PATH (fire-and-forget, after response):
-//     2. Detail         — Claude Code via proxy → per-concept content  (not yet wired)
+//     2.  Detail         — Claude Code via proxy → per-concept content (Claude, parallel)
+//     2.5 Coverage Audit — pure code + targeted Claude → accuracy backstop
+//     3.  Narrative      — Claude Code via proxy → canon + arcs        (Claude)
 //
 // The fast path alone produces a galaxy that is fully renderable as an
-// interactive map (knowledge + relationships + spatial). Detail enriches
-// concepts for downstream narrative and scene generation.
+// interactive map (knowledge + relationships + spatial). The background
+// path enriches concepts for downstream scene generation.
 //
-// Stages 2, 2.5, 3, 5, 6 are not yet wired through this runner.
+// Stages 5 and 6 are not yet wired through this runner.
 
 import type { Galaxy, SourceKind, SourcePart, ChapterId } from "@scholarsystem/shared";
 import { runChunker } from "./chunker";
 import { runStructureStage } from "./structure";
 import { runLayout } from "./layout";
+import { runDetailStage } from "./detail";
+import { runCoverageAudit } from "./coverage";
+import { runNarrativeStage } from "./narrative";
 import { destroySession } from "../lib/proxy-client";
 
 export interface RunPipelineInput {
@@ -39,8 +44,19 @@ export interface RunPipelineInput {
 /**
  * Fast path: runs chunk → structure → layout and returns the galaxy.
  * The returned blob is fully renderable but has no `detail` yet.
+ *
+ * Also kicks off the background path (detail → coverage → narrative)
+ * which mutates the galaxy blob after the fast path returns. The caller
+ * is expected to persist the galaxy to SQLite and update it as the
+ * background stages complete.
  */
-export async function runPipeline(input: RunPipelineInput): Promise<Galaxy> {
+export async function runPipeline(
+  input: RunPipelineInput,
+  callbacks?: {
+    /** Called after each background stage completes with the updated galaxy. */
+    onStageComplete?: (galaxy: Galaxy, stage: string) => void | Promise<void>;
+  },
+): Promise<Galaxy> {
   // Stage 0: chunk text into source units + mint blob.
   const { galaxy } = runChunker({
     chapterId: input.chapterId,
@@ -66,7 +82,37 @@ export async function runPipeline(input: RunPipelineInput): Promise<Galaxy> {
     // });
   }
 
+  // Fire-and-forget: background path runs after the galaxy is returned.
+  // The galaxy blob is mutated in place — the caller should re-persist
+  // after each stage callback.
+  runBackgroundPath(galaxy, callbacks).catch((err) => {
+    console.error(`[runner] background path failed:`, err);
+  });
+
   return galaxy;
+}
+
+/**
+ * Background path: detail → coverage audit → narrative.
+ * Does not throw — each stage handles its own errors gracefully.
+ */
+async function runBackgroundPath(
+  galaxy: Galaxy,
+  callbacks?: {
+    onStageComplete?: (galaxy: Galaxy, stage: string) => void | Promise<void>;
+  },
+): Promise<void> {
+  // Stage 2: detail extraction (parallel per-topic Claude calls).
+  await runDetailStage(galaxy);
+  await callbacks?.onStageComplete?.(galaxy, "detail");
+
+  // Stage 2.5: coverage audit (pure code + targeted Claude call).
+  await runCoverageAudit(galaxy);
+  await callbacks?.onStageComplete?.(galaxy, "coverageAudit");
+
+  // Stage 3: narrative (blocks on 2.5 so beats reference real content).
+  await runNarrativeStage(galaxy);
+  await callbacks?.onStageComplete?.(galaxy, "narrative");
 }
 
 /**
