@@ -1,4 +1,4 @@
-// End-to-end smoke test for the parsing pipeline.
+// End-to-end smoke test for the v2 pipeline.
 //
 // Usage:
 //   bun run src/scripts/test-pipeline.ts path/to/notes.txt
@@ -7,14 +7,14 @@
 //
 // What it does:
 //   1. Reads raw text from a file, stdin, or the --inline arg
-//   2. Runs ingest → structure → layout
+//   2. Runs chunk → structure (via proxy) → layout
 //   3. Prints a human summary + the full validated Galaxy JSON
 //   4. Persists the galaxy to SQLite so you can fetch it via the HTTP route
 //
+// Requires the proxy server to be running on localhost:4100.
 // Exits non-zero on any stage failure so CI can rely on it.
 
-import { runPipeline } from "../pipeline/runner";
-import { runDetail } from "../pipeline/parsing/detail";
+import { runPipeline, sanitizeChapterId } from "../pipeline/runner";
 import { saveGalaxy } from "../db/store";
 
 async function main() {
@@ -45,19 +45,16 @@ async function main() {
   }
 
   console.log(`[test-pipeline] input: ${text.length} chars${filename ? ` from ${filename}` : ""}`);
-  console.log(`[test-pipeline] running ingest → structure → layout → detail...`);
+  console.log(`[test-pipeline] running chunk → structure → layout...`);
+  console.log(`[test-pipeline] (requires proxy on localhost:4100)`);
 
   const started = Date.now();
   const galaxy = await runPipeline({
+    chapterId: sanitizeChapterId(filename ?? "w1"),
     kind: filename ? "text" : "paste",
     filename,
     text,
   });
-  // The HTTP route runs Stage 2 in the background after responding. The
-  // CLI deliberately awaits it instead so the harness prints real
-  // detail coverage — the whole point of this script is to exercise
-  // the full pipeline synchronously.
-  await runDetail(galaxy, text);
   const elapsed = Date.now() - started;
 
   saveGalaxy(galaxy);
@@ -72,21 +69,6 @@ async function main() {
   console.log(`[test-pipeline] knowledge:  ${k.topics.length} topics, ${k.subtopics.length} subtopics, ${k.concepts.length} concepts (${k.looseConceptIds.length} loose)`);
   console.log(`[test-pipeline] relations:  ${galaxy.relationships.length}`);
   console.log(`[test-pipeline] bodies:     ${s.bodies.length} (${s.bodies.filter((b) => b.kind === "moon" || b.kind === "asteroid").length} playable)`);
-
-  // Stage 2 coverage: how many concepts got detail extracted.
-  const detailCount = Object.keys(galaxy.detail).length;
-  const conceptCount = k.concepts.length;
-  const coverage = conceptCount > 0 ? Math.round((detailCount / conceptCount) * 100) : 0;
-  console.log(`[test-pipeline] detail:     ${detailCount}/${conceptCount} concepts (${coverage}% coverage)`);
-
-  // Sample the first concept's detail block so prompt drift is obvious.
-  const firstDetail = Object.values(galaxy.detail)[0];
-  if (firstDetail) {
-    console.log(`[test-pipeline] sample detail for '${firstDetail.conceptId}':`);
-    console.log(`                  def: ${firstDetail.fullDefinition.slice(0, 120)}${firstDetail.fullDefinition.length > 120 ? "…" : ""}`);
-    console.log(`                  formulas=${firstDetail.formulas.length} examples=${firstDetail.workedExamples.length} edgeCases=${firstDetail.edgeCases.length} mnemonics=${firstDetail.mnemonics.length} quotes=${firstDetail.sourceQuotes.length}`);
-  }
-
   console.log(`[test-pipeline] pipeline:   ${Object.entries(galaxy.pipeline).map(([k, v]) => `${k}=${v.status}`).join(" ")}`);
   console.log("");
   console.log("[test-pipeline] fetch via:  GET /api/galaxy/" + galaxy.meta.id);

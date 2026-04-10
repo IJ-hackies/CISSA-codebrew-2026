@@ -49,7 +49,7 @@ Status: **Tier 1 + Tier 2 + Tier 3 complete** (in-memory progress; backend persi
 - [ ] Progress persistence — currently in-memory only; `PATCH /api/galaxy/:id/progress` endpoint not yet built
 
 ### Backend v2 — Workspace Proxy + Obsidian Markdown Rewrite
-Status: **schema v2 done, proxy scaffolded, API server pipeline next** — supersedes the earlier spawner + TAB-delimited Stage 1 + in-memory Stage 2 approach. The prior backend work under `server/src/pipeline/parsing/` (ingest, structure, detail, extractors) and `pipeline/worldgen/layout.ts` is being superseded; extractor dispatch + the SQLite store carry over, everything else is rebuilt. Branch: `feat/proxy-server`.
+Status: **Stages 0–4 wired, Stages 2/2.5/3 implemented and running as background path** — supersedes the earlier spawner + TAB-delimited Stage 1 + in-memory Stage 2 approach. The prior backend work under `server/src/pipeline/parsing/` (ingest, structure, detail, extractors) and `pipeline/worldgen/layout.ts` is being superseded; extractor dispatch + the SQLite store carry over, everything else is rebuilt. Branch: `feat/refined-proxy`.
 
 **Schema changes (do first — blocks everything else):**
 - [x] `source.chapters[].units[]` — stable numbered source units (`w1-s-0001`), immutable once written
@@ -70,16 +70,16 @@ Status: **schema v2 done, proxy scaffolded, API server pipeline next** — super
 - [x] Proxy-client library for the API server (`server/src/lib/proxy-client.ts`), replacing `spawner.ts`
 
 **API server pipeline rewrite (`scholarsystem/server/`):**
-- [ ] Stage 0 chunker — pure code, `pipeline/chunker.ts`, produces numbered source units per chapter
-- [ ] Stage 1 structure prompt — Obsidian markdown output to `stage1-structure/`, wikilink-based relationships
-- [ ] Stage 2 detail prompt — per-topic parallel sandboxes (`stage2-detail/<topic-id>/`), per-concept markdown notes with frontmatter + `sourceRefs`
-- [ ] Stage 2.5 coverage auditor — pure-code uncited-unit diff + targeted gap-audit Claude call loop
-- [ ] Stage 3 narrative — canon writer (first-run) + arc extender (chapter mode)
-- [ ] Stage 4 layout v1 — extension-aware concentric placement with position locks
+- [x] Stage 0 chunker — pure code, `pipeline/chunker.ts`, produces numbered source units per chapter
+- [x] Stage 1 structure prompt — Obsidian markdown output to `stage1-structure/`, wikilink-based relationships. **Current implementation is a temporary placeholder**; a teammate is building an enhanced version using a "skill" system targeting higher extraction accuracy. Will be imported to replace the current Stage 1 once ready.
+- [x] Stage 2 detail — proxy-based, `pipeline/detail.ts` + `prompts/detail.ts`. Parallel fan-out per topic, writes Obsidian markdown to `stage2-detail/`, compiled via `compile/index.ts`. **Current prompt is a temporary placeholder**; same teammate building enhanced version alongside Stage 1.
+- [x] Stage 2.5 coverage auditor — `pipeline/coverage.ts`. Pure-code uncited-unit diff + targeted gap-audit Claude call loop (up to 3 rounds, 95% threshold). Produces `stage2-coverage/` files with attach/new-concept/skip actions.
+- [x] Stage 3 narrative — `pipeline/narrative.ts` + `prompts/narrative.ts`. Canon writer (first-run) + arc extender (chapter mode). Compiles `stage3-narrative/canon.md` + `stage3-narrative/arcs/<chapter>.md` via `compileNarrative()` in `compile/index.ts`.
+- [x] Stage 4 layout v1 — extension-aware concentric placement with position locks
 - [ ] Stage 5 visuals — append-only per-body params from `narrative.canon`
-- [ ] Compile step — folder → Galaxy blob via `gray-matter` frontmatter parser + wikilink walker + Zod validation
-- [ ] Pipeline orchestrator driving the proxy stage-by-stage with status writes into `pipeline[stage].status`
-- [ ] `POST /api/galaxy/create` — first-chapter path
+- [x] Compile step — folder → Galaxy blob via `gray-matter` frontmatter parser + wikilink walker + Zod validation (structure + detail + narrative compilers)
+- [x] Pipeline orchestrator — `runner.ts` drives fast path (0→1→4) synchronously, background path (2→2.5→3) fire-and-forget with `onStageComplete` callback for re-persistence
+- [x] `POST /api/galaxy/create` — first-chapter path, re-persists galaxy to SQLite after each background stage
 - [ ] `POST /api/galaxy/:id/extend` — chapter extension path (rehydrate workspace, run delta stages only)
 
 **Stage 6 — Scene Generation (On-Demand):**
@@ -104,7 +104,7 @@ Status: **schema v2 done, proxy scaffolded, API server pipeline next** — super
 
 _Append newest entries at the top. Format: `YYYY-MM-DD — what landed — branch/PR`._
 
-- 2026-04-10 — **Tier 3 stats page + orbit fix landed** (`feat/frontend-enhancements`): `StatsView.vue` at `/galaxy/:id/stats` with overall mastery donut ring + counter pills + per-topic cards (animated progress bars, palette-coloured). Bar-chart icon button in `SkillTreeHUD` routes to stats. CSS two-spinner orbit centering fixed in `PlanetView.vue` — all orbit layers now 0×0 `position:absolute` so `transform-origin` is always the orbit centre; orbit radii and durations increased. Reactivity verified: constellation progress arcs update live via Vue 3 Proxy when `ConceptScene.markVisited()` mutates `galaxy.value.progress.bodies`.
+- 2026-04-10 — **Stages 2, 2.5, 3 implemented and wired into runner** (`feat/refined-proxy`): new proxy-based detail stage (`pipeline/detail.ts` + `prompts/detail.ts`) with parallel per-topic fan-out writing Obsidian markdown to `stage2-detail/`; coverage auditor (`pipeline/coverage.ts`) with pure-code uncited-unit diff + targeted Claude gap-audit loop (3 rounds, 95% threshold); narrative stage (`pipeline/narrative.ts` + `prompts/narrative.ts`) with canon writer (first-run) + arc extender (chapter mode) writing to `stage3-narrative/`; `compileNarrative()` added to `compile/index.ts`; runner now fires background path (2→2.5→3) after fast path with `onStageComplete` callback; galaxy route re-persists to SQLite after each background stage. All new code typechecks clean.
 - 2026-04-10 — **proxy skeleton landed** (`scholarsystem/proxy/`): Bun+Hono workspace member, worker pool with concurrency cap, workspace manager with single-writer locks + TTL sweep + crash recovery, rehydrate-from-blob, 4 session endpoints (files/run-SSE/compile/delete), SSE stream helper, proxy-client on the API server side. Typechecks clean. `@scholarsystem/shared` exports field added.
 - 2026-04-10 — **schema v2 landed in `shared/types/`**: chapter-prefixed `Slug` + new `ChapterId`/`SourceUnitId`, `source` restructured into `chapters[]` with stable numbered `units[]`, `meta.chapters[]` upload history, `sourceRefs.min(1)` on `Concept`/`Subtopic`/`Topic`/`ConceptDetail`/`Relationship`, `narrative` split into frozen `canon` + append-only `arcs[]`, `pipeline.coverageAudit` stage added, `SCHEMA_VERSION` bumped to 2, mutability zones rewritten in `galaxy.ts`. Prior server code under `server/src/pipeline/` + `fixtures/sample-galaxy.ts` + `db/store.ts` will not typecheck against the new shapes — expected, that code is being rewritten in step 3 of the backend revamp
 - 2026-04-10 — backend architecture locked to **workspace-proxy + Obsidian markdown** model: Claude Code operates on per-galaxy workspace directories on a VPS proxy, stages read/write frontmatter+wikilink markdown notes, compile step walks folders into the Galaxy blob. Accuracy guarantee via stable source-unit chunks + mandatory `sourceRefs` citations + pure-code coverage auditor + targeted gap-audit Claude call. Chapter extensions first-class: `meta.chapters[]`, frozen `narrative.canon` + extendable `narrative.arcs[]`, position-locked layout, append-only mutability. Chapter-prefixed slugs enforced in `Slug` Zod schema. Sonnet 4.6 default across Stages 1–5; Opus/Haiku only in Stage 6 via `modelTier`. Supersedes prior spawner + TAB-delimited approach. Context files updated — `.context/`

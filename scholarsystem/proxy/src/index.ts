@@ -44,4 +44,5 @@ console.log(
 export default {
   port: config.port,
   fetch: app.fetch,
+  idleTimeout: 255, // seconds — SSE streams for Claude Code runs stay open a long time
 };

@@ -23,4 +23,5 @@ console.log(`[server] listening on http://localhost:${port}`);
 export default {
   port,
   fetch: app.fetch,
+  idleTimeout: 255, // seconds — Claude Code stages can take minutes
 };

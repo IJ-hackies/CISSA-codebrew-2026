@@ -1,4 +1,4 @@
-// End-to-end runner for the current pipeline slice.
+// End-to-end runner for the v2 pipeline.
 //
 // ─── Execution model ──────────────────────────────────────────────────────
 //
@@ -6,98 +6,125 @@
 // block on every Claude call:
 //
 //   FAST PATH (foreground, awaited by the HTTP route):
-//     0. Ingest       — mint id, hash, init blob        (pure code)
-//     1. Structure    — Claude call → knowledge + rels  (Claude)
-//     4. Layout       — deterministic spatial placement (pure code)
+//     0. Ingest/Chunk   — mint id, hash, chunk text into source units  (pure code)
+//     1. Structure      — Claude Code via proxy → knowledge + rels     (Claude)
+//     4. Layout         — deterministic spatial placement              (pure code)
 //
-//   BACKGROUND PATH (fire-and-forget from the HTTP route, after response):
-//     2. Detail       — Claude calls → per-concept deep content
+//   BACKGROUND PATH (fire-and-forget, after response):
+//     2.  Detail         — Claude Code via proxy → per-concept content (Claude, parallel)
+//     2.5 Coverage Audit — pure code + targeted Claude → accuracy backstop
+//     3.  Narrative      — Claude Code via proxy → canon + arcs        (Claude)
 //
-// The fast path alone produces a galaxy that is already fully renderable
-// as an interactive map (knowledge + relationships + spatial is all the
-// frontend needs). Detail enriches concepts for downstream narrative and
-// scene generation, but nothing rendered today depends on it, so there's
-// no reason to make the user wait for it during creation.
+// The fast path alone produces a galaxy that is fully renderable as an
+// interactive map (knowledge + relationships + spatial). The background
+// path enriches concepts for downstream scene generation.
 //
-// When detail finishes in the background, it writes into `galaxy.detail`
-// and the caller is responsible for re-persisting the blob — this module
-// does NOT import the db layer, to keep the pipeline testable without a
-// SQLite dependency. See `routes/galaxy.ts` for the wiring.
-//
-// Stages 3 (narrative), 5 (visuals), 6 (scene) are not yet implemented
-// and remain `pending` in the returned blob's pipeline scope.
-//
-// ─── Client awareness of background detail ───────────────────────────────
-//
-// Today the frontend is NOT notified when background detail completes. It
-// receives the galaxy with `pipeline.detail.status === "running"` and
-// empty `detail: {}`, and never re-fetches. This is deliberate for now:
-// nothing the frontend currently renders consumes detail, so silent
-// population is the simplest correct behavior.
-//
-// When a UI surface eventually wants to show detail (loading state in a
-// scene opener, for example), upgrade the client to either:
-//   (b) poll GET /api/galaxy/:id until pipeline.detail.status !== "running", or
-//   (c) add an SSE stream that pushes pipeline-stage transitions.
-// Both are purely additive — no server-side pipeline change needed.
+// Stages 5 and 6 are not yet wired through this runner.
 
-import { Galaxy, SourceKind } from "../../../shared/types";
-import { runIngest } from "./parsing/ingest";
-import { runStructureFromText } from "./parsing/structure";
-import { runDetail } from "./parsing/detail";
-import { runLayout } from "./worldgen/layout";
-import type { SourcePart } from "../../../shared/types";
+import type { Galaxy, SourceKind, SourcePart, ChapterId } from "@scholarsystem/shared";
+import { runChunker } from "./chunker";
+import { runStructureStage } from "./structure";
+import { runLayout } from "./layout";
+import { runDetailStage } from "./detail";
+import { runCoverageAudit } from "./coverage";
+import { runNarrativeStage } from "./narrative";
+import { destroySession } from "../lib/proxy-client";
 
 export interface RunPipelineInput {
+  chapterId: ChapterId;
   kind: SourceKind;
   filename: string | null;
   text: string;
   title?: string;
-  /** Optional per-part provenance for multi-input uploads. */
   parts?: SourcePart[];
+  /** PDF page images for vision-based content extraction in Claude Code. */
+  pageImages?: { page: number; png: Buffer }[];
 }
 
 /**
- * Fast path: runs ingest → structure → layout and returns the galaxy.
- * The returned blob is fully renderable but has no `detail` yet —
- * `pipeline.detail.status` will be `"pending"`. The caller should kick
- * off {@link runDetailBackground} immediately after persisting.
+ * Fast path: runs chunk → structure → layout and returns the galaxy.
+ * The returned blob is fully renderable but has no `detail` yet.
+ *
+ * Also kicks off the background path (detail → coverage → narrative)
+ * which mutates the galaxy blob after the fast path returns. The caller
+ * is expected to persist the galaxy to SQLite and update it as the
+ * background stages complete.
  */
-export async function runPipeline(input: RunPipelineInput): Promise<Galaxy> {
-  const { galaxy } = runIngest(input);
-  await runStructureFromText(galaxy, input.text);
-  runLayout(galaxy);
+export async function runPipeline(
+  input: RunPipelineInput,
+  callbacks?: {
+    /** Called after each background stage completes with the updated galaxy. */
+    onStageComplete?: (galaxy: Galaxy, stage: string) => void | Promise<void>;
+  },
+): Promise<Galaxy> {
+  // Stage 0: chunk text into source units + mint blob.
+  const { galaxy } = runChunker({
+    chapterId: input.chapterId,
+    kind: input.kind,
+    filename: input.filename,
+    text: input.text,
+    title: input.title,
+    parts: input.parts,
+  });
+
+  try {
+    // Stage 1: structure via proxy (Claude Code).
+    await runStructureStage(galaxy, input.pageImages);
+
+    // Stage 4: layout (pure code, runs immediately after structure).
+    runLayout(galaxy);
+  } finally {
+    // Clean up proxy workspace — best-effort, don't fail the pipeline.
+    // TODO: re-enable once pipeline is stable; leave workspaces for
+    // inspection during development.
+    // destroySession(galaxy.meta.id).catch((err) => {
+    //   console.warn(`[runner] workspace cleanup failed: ${err}`);
+    // });
+  }
+
+  // Fire-and-forget: background path runs after the galaxy is returned.
+  // The galaxy blob is mutated in place — the caller should re-persist
+  // after each stage callback.
+  runBackgroundPath(galaxy, callbacks).catch((err) => {
+    console.error(`[runner] background path failed:`, err);
+  });
+
   return galaxy;
 }
 
 /**
- * Background path: runs Stage 2 (detail) against a galaxy that's already
- * been through the fast path. Never throws — `runDetail` itself is
- * non-fatal (marks `pipeline.detail.status` as `error` on failure so the
- * galaxy stays valid) and this wrapper swallows any lingering rejection
- * from the persist callback so an unhandled rejection can't crash the
- * server from a fire-and-forget call site.
- *
- * `persist` is injected instead of importing `saveGalaxy` directly so
- * this module stays free of a db dependency.
+ * Background path: detail → coverage audit → narrative.
+ * Does not throw — each stage handles its own errors gracefully.
  */
-export async function runDetailBackground(
+async function runBackgroundPath(
   galaxy: Galaxy,
-  rawText: string,
-  persist: (galaxy: Galaxy) => void,
+  callbacks?: {
+    onStageComplete?: (galaxy: Galaxy, stage: string) => void | Promise<void>;
+  },
 ): Promise<void> {
-  try {
-    await runDetail(galaxy, rawText);
-  } catch (err) {
-    // runDetail should already be non-throwing, but belt-and-braces:
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[runDetailBackground] runDetail threw (unexpected): ${message}`);
-  }
+  // Stage 2: detail extraction (parallel per-topic Claude calls).
+  await runDetailStage(galaxy);
+  await callbacks?.onStageComplete?.(galaxy, "detail");
 
-  try {
-    persist(galaxy);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[runDetailBackground] persist failed: ${message}`);
-  }
+  // Stage 2.5: coverage audit (pure code + targeted Claude call).
+  await runCoverageAudit(galaxy);
+  await callbacks?.onStageComplete?.(galaxy, "coverageAudit");
+
+  // Stage 3: narrative (blocks on 2.5 so beats reference real content).
+  await runNarrativeStage(galaxy);
+  await callbacks?.onStageComplete?.(galaxy, "narrative");
+}
+
+/**
+ * Sanitize a user-supplied chapter label into a valid ChapterId.
+ * Lowercases, replaces non-alphanumeric runs with hyphens, trims edges.
+ * Falls back to "w1" if the result is empty.
+ */
+export function sanitizeChapterId(label?: string): ChapterId {
+  if (!label) return "w1" as ChapterId;
+  const slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return (slug || "w1") as ChapterId;
 }

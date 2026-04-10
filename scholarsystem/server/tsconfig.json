@@ -8,7 +8,10 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": false,
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@scholarsystem/shared": ["../shared/types/index.ts"]
+    }
   },
   "include": ["src/**/*"]
 }
