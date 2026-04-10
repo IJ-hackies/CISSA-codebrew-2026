@@ -2,6 +2,9 @@
   "name": "@scholarsystem/shared",
   "type": "module",
   "private": true,
+  "exports": {
+    ".": "./types/index.ts"
+  },
   "dependencies": {
     "zod": "^3.23.8"
   }
