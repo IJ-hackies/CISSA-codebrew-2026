@@ -18,6 +18,36 @@ Status: **in progress** (mockup mode, fake submit, localStorage scaffolding)
 - [ ] **Stubbed** — WebGL post-fx (grain/bloom/god-rays); quality flag wired, implementation deferred
 - [ ] **Stubbed** — `Renderer.setPointer()` still on public API but no longer consumed (calmer ambient model — kept for forward compatibility)
 
+### Frontend — Galaxy Exploration (Skill Tree + Planet View + Concept Scene + Stats)
+Status: **Tier 1 + Tier 2 + Tier 3 complete** (in-memory progress; backend persistence pending)
+
+- [x] **Skill tree page** (`/galaxy/:id`) — `SkillTree.vue` + `ConstellationSection.vue` + `SkillTreeHUD.vue`
+  - Seeded LCG constellation layout: each topic's subtopic nodes form a unique glyph shape (deterministic per topic ID, never the same twice)
+  - 7-layer SVG planet rendering per node: atmosphere glow → radial gradient → terrain ellipses → terminator shadow → cloud wisps → rim highlight → specular
+  - Node states: `locked` / `available` (pulse ring) / `in-progress` (progress arc) / `mastered` (star badge)
+  - Progress arc on `in-progress` nodes shows `completedConcepts / totalConcepts` — updates reactively via Vue 3 Proxy when concepts are completed
+  - Dashed connector lines between consecutive nodes in each topic section
+  - `SkillTreeHUD`: galaxy title, animated progress bar (`overallMastery`), visited/total count, stats button (bar chart icon → `/galaxy/:id/stats`)
+- [x] **Planet view page** (`/galaxy/:id/planet/:subtopicId`) — `PlanetView.vue`
+  - Large central planet SVG (200px desktop / 140px mobile) with same 7-layer rendering seeded from subtopic ID
+  - Concept moons orbit via CSS two-spinner trick: `.moon-rotator` (CW spin, anchored at viewport 50%/50%) → `.moon-offset` (0×0 absolute, `translateX` to radius) → `.moon-counter` (0×0 absolute, CCW spin) → `.moon-btn` (`translate(-50%,-50%)` centred on orbit point). All layers are 0×0 so `transform-origin` is always the orbit centre — avoids the drift bug caused by content-sized elements rotating around their own midpoint
+  - Orbit radii: 167–267px desktop, 139–211px mobile. Durations: 70/105/85/125s. Orbit ring SVG centred via `top:50%; left:50%; transform:translate(-50%,-50%)`
+  - Moon SVGs coloured by concept kind; visited badge (green checkmark) on completed moons
+- [x] **Concept scene page** (`/galaxy/:id/concept/:conceptId`) — `ConceptScene.vue`
+  - Study card: kind-themed opening flavour text, concept title, `brief` text
+  - 4-option multiple-choice challenge: correct = `concept.brief`, distractors = other concepts' briefs, shuffled via seeded RNG from `hash(concept.id)` (stable per concept)
+  - On submit: in-memory progress update to galaxy store (`visited`, `masteryEstimate`, `attemptCount`, `bestScore`, `visitedCount`, `completedCount`, `overallMastery`)
+  - Continue → back to parent planet
+- [x] **Stats page** (`/galaxy/:id/stats`) — `StatsView.vue`
+  - Overall mastery SVG donut ring (r=72, animated `stroke-dashoffset`), percentage in centre
+  - Counter pills: explored / mastered / total
+  - Per-topic cards: chapter label (accent coloured), title, animated mastery bar (palette gradient), subtopic and concept counts
+  - Back → skill tree
+- [x] Router: all four routes wired (`/galaxy/:id`, `/galaxy/:id/planet/:subtopicId`, `/galaxy/:id/concept/:conceptId`, `/galaxy/:id/stats`)
+- [x] `galaxyStore.ts` — shared `ref<Galaxy>` singleton; all pages read and mutate the same reactive object
+- [x] `useIsMobile` composable — responsive layout for planet view
+- [ ] Progress persistence — currently in-memory only; `PATCH /api/galaxy/:id/progress` endpoint not yet built
+
 ### Backend v2 — Workspace Proxy + Obsidian Markdown Rewrite
 Status: **Stages 0–4 wired, Stages 2/2.5/3 implemented and running as background path** — supersedes the earlier spawner + TAB-delimited Stage 1 + in-memory Stage 2 approach. The prior backend work under `server/src/pipeline/parsing/` (ingest, structure, detail, extractors) and `pipeline/worldgen/layout.ts` is being superseded; extractor dispatch + the SQLite store carry over, everything else is rebuilt. Branch: `feat/refined-proxy`.
 
