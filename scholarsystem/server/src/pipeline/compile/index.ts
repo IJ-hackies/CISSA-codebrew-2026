@@ -19,6 +19,10 @@ import {
   Relationship,
   Relationships,
   ConceptDetail,
+  NarrativeCanon,
+  ChapterArc,
+  ArcBeat,
+  Character,
   Slug,
 } from "@scholarsystem/shared";
 import type {
@@ -26,6 +30,8 @@ import type {
   ModelTier,
   RelationshipKind,
   ChapterId,
+  NarrativeCanon as NarrativeCanonType,
+  ChapterArc as ChapterArcType,
 } from "@scholarsystem/shared";
 import { parseNote, extractWikilinks, type ParsedNote } from "./frontmatter";
 
@@ -227,6 +233,111 @@ export function compileDetail(files: Record<string, string>): CompiledDetail {
   }
 
   return { detail };
+}
+
+// ─── Stage 3 compile: stage3-narrative/ → Narrative scopes ──────────
+
+export interface CompiledNarrative {
+  canon: NarrativeCanonType | null;
+  arcs: ChapterArcType[];
+}
+
+/**
+ * Compile Stage 3 output from workspace markdown files.
+ *
+ * Expects:
+ *   - `stage3-narrative/canon.md` with NarrativeCanon frontmatter (first run)
+ *   - `stage3-narrative/arcs/<chapter>.md` with ChapterArc frontmatter
+ */
+export function compileNarrative(
+  files: Record<string, string>,
+): CompiledNarrative {
+  const notes = pickStageFiles(files, "stage3-narrative/");
+  let canon: NarrativeCanonType | null = null;
+  const arcs: ChapterArcType[] = [];
+
+  for (const note of notes) {
+    const type = note.data.type as string;
+
+    if (type === "canon") {
+      try {
+        const tone = note.data.tone as Record<string, unknown> | undefined;
+        const aesthetic = note.data.aesthetic as Record<string, unknown> | undefined;
+
+        // Parse recurring characters — may be a JSON string or array.
+        let chars: unknown[] = [];
+        if (typeof note.data.recurringCharacters === "string") {
+          try {
+            chars = JSON.parse(note.data.recurringCharacters);
+          } catch {
+            chars = [];
+          }
+        } else if (Array.isArray(note.data.recurringCharacters)) {
+          chars = note.data.recurringCharacters;
+        }
+
+        canon = NarrativeCanon.parse({
+          setting: note.data.setting ?? "",
+          protagonist: note.data.protagonist ?? "",
+          premise: note.data.premise ?? "",
+          stakes: note.data.stakes ?? "",
+          tone: {
+            primary: tone?.primary ?? "wondrous",
+            secondary: tone?.secondary ?? null,
+            genre: tone?.genre ?? "exploration",
+          },
+          aesthetic: {
+            paletteDirection: aesthetic?.paletteDirection ?? "",
+            atmosphereDirection: aesthetic?.atmosphereDirection ?? "",
+            motifKeywords: asStringArray(aesthetic?.motifKeywords),
+          },
+          recurringCharacters: chars.map((c: any) =>
+            Character.parse({
+              id: c.id,
+              name: c.name ?? "",
+              role: c.role ?? "",
+              description: c.description ?? "",
+              voice: c.voice ?? "",
+              arc: c.arc ?? "",
+            }),
+          ),
+          finaleHook: (note.data.finaleHook as string) ?? "",
+          hardConstraints: asStringArray(note.data.hardConstraints),
+        });
+      } catch (err) {
+        console.warn(
+          `compile: canon validation failed: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    } else if (type === "arc") {
+      try {
+        const beats = Array.isArray(note.data.beats) ? note.data.beats : [];
+
+        const arc = ChapterArc.parse({
+          chapter: note.data.chapter ?? "",
+          arcSummary: (note.data.arcSummary as string) ?? "",
+          beats: beats.map((b: any) =>
+            ArcBeat.parse({
+              topicId: b.topicId ?? "",
+              role: b.role ?? "opening",
+              beat: b.beat ?? "",
+              emotionalTarget: b.emotionalTarget ?? "",
+              connectsTo: asStringArray(b.connectsTo),
+            }),
+          ),
+          chapterHook: (note.data.chapterHook as string) ?? "",
+        });
+
+        arcs.push(arc);
+      } catch (err) {
+        console.warn(
+          `compile: arc validation failed for ${note.path}: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+  }
+
+  return { canon, arcs };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────

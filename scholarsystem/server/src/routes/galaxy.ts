@@ -205,19 +205,31 @@ galaxyRoutes.post("/create", async (c) => {
   try {
     const chapterId = sanitizeChapterId(resolved.title);
 
-    const galaxy = await runPipeline({
-      chapterId,
-      kind: resolved.kind,
-      filename: resolved.filename,
-      text: resolved.text,
-      title: resolved.title,
-      parts: resolved.parts,
-      pageImages: resolved.pageImages,
-    });
+    const galaxy = await runPipeline(
+      {
+        chapterId,
+        kind: resolved.kind,
+        filename: resolved.filename,
+        text: resolved.text,
+        title: resolved.title,
+        parts: resolved.parts,
+        pageImages: resolved.pageImages,
+      },
+      {
+        // Re-persist after each background stage completes so detail,
+        // coverage, and narrative results survive even if the server
+        // restarts before all stages finish.
+        onStageComplete: (g, stage) => {
+          try {
+            saveGalaxy(g);
+            console.log(`[galaxy/create] persisted after background stage: ${stage}`);
+          } catch (err) {
+            console.error(`[galaxy/create] failed to persist after ${stage}:`, err);
+          }
+        },
+      },
+    );
     saveGalaxy(galaxy);
-
-    // Stage 2 (detail) is not yet wired through the v2 proxy path.
-    // When it is, fire-and-forget here and re-persist when done.
 
     return c.json(galaxy, 201);
   } catch (err) {

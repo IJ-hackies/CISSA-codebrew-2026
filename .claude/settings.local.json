@@ -23,7 +23,8 @@
       "WebFetch(domain:amanhimself.dev)",
       "WebFetch(domain:www.npmjs.com)",
       "Bash(bun -e \"import { renderPageAsImage, getDocumentProxy } from 'unpdf'; console.log\\('unpdf works:', typeof renderPageAsImage\\)\")",
-      "Bash(bun -e \"import { extractPdf } from './src/pipeline/parsing/extract/pdf'; console.log\\('pdf extractor loads:', typeof extractPdf\\)\")"
+      "Bash(bun -e \"import { extractPdf } from './src/pipeline/parsing/extract/pdf'; console.log\\('pdf extractor loads:', typeof extractPdf\\)\")",
+      "Bash(npx tsc:*)"
     ]
   }
 }
