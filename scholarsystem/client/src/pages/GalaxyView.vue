@@ -35,11 +35,25 @@
         left: lbl.x + 'px',
         top:  lbl.y + 'px',
         opacity: lbl.opacity,
-        color: lbl.color,
         '--lc': lbl.color,
       }"
     >
-      {{ lbl.title }}
+      <span class="lbl-text">{{ lbl.title }}</span>
+      <!-- Exploration arc ring — inline, next to title -->
+      <svg v-if="lbl.totalCount > 0" class="explore-arc" width="18" height="18" viewBox="0 0 18 18">
+        <circle cx="9" cy="9" r="6" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1.8"/>
+        <circle
+          cx="9" cy="9" r="6"
+          fill="none"
+          :stroke="lbl.color"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          :stroke-dasharray="2 * Math.PI * 6"
+          :stroke-dashoffset="2 * Math.PI * 6 * (1 - lbl.visitedCount / lbl.totalCount)"
+          transform="rotate(-90 9 9)"
+          style="transition: stroke-dashoffset 0.6s ease"
+        />
+      </svg>
     </div>
 
     <!-- Hover tooltip — brief description on hover -->
@@ -77,12 +91,12 @@ const containerRef = ref<HTMLDivElement>()
 const veilRef      = ref<HTMLDivElement>()
 const loading      = ref(true)
 const navigating   = ref(false)
-const { triggerWarp } = useWarpEffect()
+const { triggerWarp }   = useWarpEffect()
 const hovered      = ref<{ brief: string } | null>(null)
 const tooltipPos   = ref({ x: 0, y: 0 })
 
 // ── HTML label overlay ────────────────────────────────────────────────────────
-interface LabelPos { id: string; x: number; y: number; opacity: number; title: string; color: string }
+interface LabelPos { id: string; x: number; y: number; opacity: number; title: string; color: string; visitedCount: number; totalCount: number }
 const labelPositions = ref<LabelPos[]>([])
 // Store world positions for each labeled mesh so we can project them each frame
 const labelWorldData: Array<{ id: string; mesh: THREE.Mesh; title: string; color: string }> = []
@@ -252,21 +266,30 @@ function onFrame(elapsed: number) {
   const h   = containerRef.value.clientHeight
   const tmp = new THREE.Vector3()
 
+  const g = galaxy.value
   const updated: LabelPos[] = []
   for (const lbl of labelWorldData) {
     tmp.copy(lbl.mesh.position)
     tmp.project(cam)
-    // NDC → screen pixels (label sits just above the orb)
     const sx = (tmp.x * 0.5 + 0.5) * w
     const sy = (-tmp.y * 0.5 + 0.5) * h
-    // Fade out labels that are behind the camera (tmp.z > 1)
-    // Wide fade range so labels stay fully opaque at default zoom distance
-    const dist   = cam.position.distanceTo(lbl.mesh.position)
+    const dist    = cam.position.distanceTo(lbl.mesh.position)
     const opacity = tmp.z < 1 ? Math.max(0, Math.min(1, (250 - dist) / 60)) : 0
     const radius  = (lbl.mesh.geometry as THREE.SphereGeometry).parameters.radius * lbl.mesh.scale.x
-    updated.push({ id: lbl.id, x: sx, y: sy - radius * (h / (dist + 0.01)) - 18, opacity, title: lbl.title, color: lbl.color })
+
+    // Per-cluster exploration stats
+    let visitedCount = 0, totalCount = 0
+    if (g?.knowledge && g?.exploration) {
+      const groupIds = new Set(g.knowledge.groups.filter(gr => gr.clusterId === lbl.id).map(gr => gr.id))
+      const clusterEntries = g.knowledge.entries.filter(e => e.groupId && groupIds.has(e.groupId))
+      totalCount   = clusterEntries.length
+      visitedCount = clusterEntries.filter(e => g.exploration.visited[e.id]).length
+    }
+
+    updated.push({ id: lbl.id, x: sx, y: sy - radius * (h / (dist + 0.01)) - 18, opacity, title: lbl.title, color: lbl.color, visitedCount, totalCount })
   }
   labelPositions.value = updated
+
 }
 
 // ── Raycasting ────────────────────────────────────────────────────────────────
@@ -321,9 +344,9 @@ function onClick(e: MouseEvent) {
     },
   })
   // Simultaneously tween camera position AND controls.target
-  tl.to(sceneCtx.camera.position, { x: dest.x, y: dest.y, z: dest.z, duration: 1.0, ease: 'sine.in',
+  tl.to(sceneCtx.camera.position, { x: dest.x, y: dest.y, z: dest.z, duration: 0.65, ease: 'sine.in',
     onUpdate: () => { sceneCtx!.controls.update() } }, 0)
-  tl.to(sceneCtx.controls.target, { x: target.x, y: target.y, z: target.z, duration: 1.0, ease: 'sine.in' }, 0)
+  tl.to(sceneCtx.controls.target, { x: target.x, y: target.y, z: target.z, duration: 0.65, ease: 'sine.in' }, 0)
 }
 
 // ── Mount ─────────────────────────────────────────────────────────────────────
@@ -336,12 +359,13 @@ onMounted(async () => {
   }
   loading.value = false
 
+  const isMobile = window.innerWidth < 768
   sceneCtx = useThreeScene(containerRef.value, {
     bloomStrength:  0.8,   // visible glow on orbs
     bloomRadius:    0.45,
     bloomThreshold: 0.08,
     starCount: 1400,
-    cameraZ: 110,
+    cameraZ: isMobile ? 165 : 110,
     enableDamping: true,
   })
 
@@ -359,7 +383,7 @@ onMounted(async () => {
   // Fade in — veil starts opaque, dissolves away
   if (veilRef.value) gsap.fromTo(veilRef.value, { opacity: 1 }, { opacity: 0, duration: 0.35, ease: 'power1.out' })
 
-  containerRef.value.addEventListener('mousemove', onMouseMove)
+  if (!isMobile) containerRef.value.addEventListener('mousemove', onMouseMove)
   containerRef.value.addEventListener('click', onClick)
 })
 
@@ -421,7 +445,7 @@ watch(() => galaxy.value?.knowledge, (k) => { if (k && sceneCtx) buildGraph() })
   text-align: center; pointer-events: none; z-index: 10;
 }
 .hud-title { font-family: 'Space Grotesk', sans-serif; font-size: 15px; font-weight: 600; color: #e8ecf2; letter-spacing: 0.03em; margin-bottom: 4px; }
-.hud-meta  { font-family: 'Space Grotesk', sans-serif; font-size: 11px; color: #4a5568; letter-spacing: 0.05em; text-transform: uppercase; }
+.hud-meta  { font-family: 'Space Grotesk', sans-serif; font-size: 11px; color: #8a9ab8; letter-spacing: 0.05em; text-transform: uppercase; }
 
 /* Pipeline banner */
 .pipeline-banner {
@@ -443,12 +467,19 @@ watch(() => galaxy.value?.knowledge, (k) => { if (k && sceneCtx) buildGraph() })
   transform: translateX(-50%);
   pointer-events: none;
   z-index: 10;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  transition: opacity 0.15s ease;
+}
+.lbl-text {
   font-family: 'Space Grotesk', sans-serif;
   font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  white-space: nowrap;
-  color: #e8ecf2 !important;   /* always white — node color was too dark to read */
+  color: #e8ecf2;
   text-shadow:
     0 0 20px color-mix(in srgb, var(--lc) 70%, transparent),
     0 0 40px color-mix(in srgb, var(--lc) 35%, transparent),
@@ -457,7 +488,10 @@ watch(() => galaxy.value?.knowledge, (k) => { if (k && sceneCtx) buildGraph() })
     1px 0 0 rgba(0,0,0,1),
     -1px 0 0 rgba(0,0,0,1),
     0 2px 8px rgba(0,0,0,1);
-  transition: opacity 0.15s ease;
+}
+.explore-arc {
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--lc) 55%, transparent));
 }
 
 /* Hover tooltip — brief only (title is always shown via label) */

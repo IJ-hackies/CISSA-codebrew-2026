@@ -37,7 +37,10 @@
           '--lc': lbl.color,
         }"
       >
-        <span class="lbl-kind">{{ lbl.kind }}</span>
+        <div class="lbl-top-row">
+          <span class="lbl-kind">{{ lbl.kind }}</span>
+          <span class="visited-dot" :class="{ 'is-visited': lbl.visited }" :style="{ '--lc': lbl.color }" />
+        </div>
         <span class="lbl-title">{{ lbl.title }}</span>
       </div>
     </template>
@@ -84,14 +87,14 @@ const { galaxy, loadGalaxy, setGalaxy } = useGalaxyStore()
 
 const containerRef = ref<HTMLDivElement>()
 const veilRef      = ref<HTMLDivElement>()
-const { triggerWarp } = useWarpEffect()
-const navigating   = ref(false)
+const { triggerWarp }  = useWarpEffect()
+const navigating       = ref(false)
 const hovered      = ref<{ brief: string } | null>(null)
 const tooltipPos   = ref({ x: 0, y: 0 })
 const selectedEntry = ref<Entry | null>(null)
 const selectedWrap  = ref<EntryWrap | null>(null)
 
-interface LabelPos { id: string; x: number; y: number; opacity: number; title: string; color: string; kind: string }
+interface LabelPos { id: string; x: number; y: number; opacity: number; title: string; color: string; kind: string; visited: boolean }
 const labelPositions = ref<LabelPos[]>([])
 const labelWorldData: Array<{ id: string; mesh: THREE.Mesh; title: string; color: string; kind: string; baseRadius: number }> = []
 
@@ -385,7 +388,7 @@ function buildSolarSystem() {
 
     const { mesh, baseRadius } = getMeshForKind(entry.kind, color, hexColor)
     mesh.position.copy(pos)
-    mesh.userData = { clearable: true, entryId: entry.id, title: entry.title, brief: entry.brief, kind: entry.kind }
+    mesh.userData = { clearable: true, entryId: entry.id, title: entry.title, brief: entry.brief, kind: entry.kind, baseRadius }
 
     // Subtle atmospheric glow (size varies by kind)
     const glowR = baseRadius * 1.5
@@ -437,9 +440,11 @@ function onFrame(_elapsed: number) {
     const opacity = Math.max(0, Math.min(1, (180 - dist) / 60))
     // Offset label above the body — approximate screen-space radius
     const screenOffset = Math.max(14, (lbl.baseRadius * h) / (dist + 0.1) * 0.35)
-    updated.push({ id: lbl.id, x: sx, y: sy - screenOffset - 8, opacity, title: lbl.title, color: lbl.color, kind: lbl.kind })
+    const visited = !!(galaxy.value?.exploration.visited[lbl.id])
+    updated.push({ id: lbl.id, x: sx, y: sy - screenOffset - 8, opacity, title: lbl.title, color: lbl.color, kind: lbl.kind, visited })
   }
   labelPositions.value = updated
+
 }
 
 // ── Raycasting ────────────────────────────────────────────────────────────────
@@ -472,17 +477,19 @@ function onClick(e: MouseEvent) {
   const hit  = hits.find((h) => h.object.userData.entryId || h.object.parent?.userData.entryId)
   if (!hit) return
 
-  const ud      = hit.object.userData.entryId ? hit.object.userData : hit.object.parent!.userData
-  const entry   = galaxy.value?.knowledge?.entries.find((e) => e.id === ud.entryId)
-  const wrap    = galaxy.value?.wraps[ud.entryId]
+  const ud    = hit.object.userData.entryId ? hit.object.userData : hit.object.parent!.userData
+  const entry = galaxy.value?.knowledge?.entries.find((e) => e.id === ud.entryId)
+  const wrap  = galaxy.value?.wraps[ud.entryId]
   if (!entry || !wrap || wrap.level !== 'entry') return
 
-  const target  = (hit.object.userData.entryId ? hit.object : hit.object.parent!).position.clone()
-  const camDir  = sceneCtx.camera.position.clone().sub(target).normalize()
-  const dest    = target.clone().addScaledVector(camDir, 16)
+  const target = (hit.object.userData.entryId ? hit.object : hit.object.parent!).position.clone()
+  const camDir = sceneCtx.camera.position.clone().sub(target).normalize()
+  const dest   = target.clone().addScaledVector(camDir, 16)
 
   sceneCtx.controls.enabled = false
   const tl = gsap.timeline({ onComplete: () => {
+    // Mark as visited
+    if (galaxy.value?.exploration) galaxy.value.exploration.visited[entry.id] = true
     selectedEntry.value = entry
     selectedWrap.value  = wrap as EntryWrap
   }})
@@ -526,12 +533,13 @@ onMounted(async () => {
     try { await loadGalaxy(id) } catch { setGalaxy(MOCK_GALAXY) }
   }
 
+  const isMobile = window.innerWidth < 768
   sceneCtx = useThreeScene(containerRef.value, {
     bloomStrength:  0.28,   // much softer — sun still glows, entries get subtle halo
     bloomRadius:    0.4,
     bloomThreshold: 0.07,   // low enough for varied entry emissive to catch bloom
     starCount: 1000,
-    cameraZ: 85,
+    cameraZ: isMobile ? 130 : 85,
     enableDamping: true,
   })
 
@@ -552,7 +560,7 @@ onMounted(async () => {
   // Fade in from veil
   if (veilRef.value) gsap.fromTo(veilRef.value, { opacity: 1 }, { opacity: 0, duration: 0.4, ease: 'power1.out' })
 
-  containerRef.value.addEventListener('mousemove', onMouseMove)
+  if (!isMobile) containerRef.value.addEventListener('mousemove', onMouseMove)
   containerRef.value.addEventListener('click', onClick)
 })
 
@@ -588,6 +596,10 @@ onUnmounted(() => {
 }
 .back-btn:hover { color: #e8ecf2; border-color: rgba(255,255,255,0.15); background: rgba(5,8,20,0.8); }
 
+@media (max-width: 767px) {
+  .back-btn { top: auto; bottom: 32px; left: 24px; }
+}
+
 /* System HUD */
 .system-hud {
   position: absolute; top: 24px; left: 50%; transform: translateX(-50%);
@@ -610,6 +622,20 @@ onUnmounted(() => {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
   transition: opacity 0.12s ease;
 }
+.lbl-top-row {
+  display: flex; align-items: center; gap: 5px;
+}
+.visited-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: transparent;
+  transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+.visited-dot.is-visited {
+  background: var(--lc);
+  border-color: var(--lc);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--lc) 40%, transparent);
+}
 .lbl-kind {
   font-family: 'Space Grotesk', sans-serif; font-size: 11px;
   text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600;
@@ -622,7 +648,7 @@ onUnmounted(() => {
   line-height: 1;
 }
 .lbl-title {
-  font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 700;
+  font-family: 'Space Grotesk', sans-serif; font-size: 13px; font-weight: 700;
   letter-spacing: 0.02em; white-space: nowrap; line-height: 1.2;
   color: #e8ecf2;
   text-shadow:
