@@ -21,6 +21,7 @@ const emptyPipeline = (): Pipeline => ({
   ingest: emptyStage(),
   structure: emptyStage(),
   detail: emptyStage(),
+  coverageAudit: emptyStage(),
   narrative: emptyStage(),
   layout: emptyStage(),
   visuals: emptyStage(),
@@ -30,6 +31,7 @@ export interface EmptyGalaxyInput {
   id: string;
   title: string;
   source: Galaxy["source"];
+  chapters: Galaxy["meta"]["chapters"];
   now?: number;
 }
 
@@ -43,12 +45,13 @@ export function createEmptyGalaxy(input: EmptyGalaxyInput): Galaxy {
       createdAt: now,
       updatedAt: now,
       title: input.title,
+      chapters: input.chapters,
     },
     source: input.source,
     knowledge: null,
     detail: {},
     relationships: [],
-    narrative: null,
+    narrative: { canon: null, arcs: [] },
     spatial: null,
     visuals: {},
     scenes: {},

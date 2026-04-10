@@ -32,7 +32,7 @@ export async function runStructure(
   stageStart(galaxy, "structure");
 
   try {
-    const prompt = buildStructurePrompt(galaxy.source.excerpt + maybeRest(galaxy));
+    const prompt = buildStructurePrompt(galaxy.source.chapters[0].excerpt + maybeRest(galaxy));
 
     // For now we feed the full input via the prompt itself (the excerpt
     // field only holds the first 500 chars — we pass the full text through

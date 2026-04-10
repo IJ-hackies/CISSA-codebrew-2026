@@ -210,7 +210,7 @@ defineExpose({
           @click="fileInputRef?.click()"
           aria-label="Attach files"
         >
-          <svg viewBox="0 0 20 20" width="18" height="18" fill="none">
+          <svg viewBox="0 0 20 20" width="15" height="15" fill="none">
             <path
               d="M14.5 9.5 9.7 14.3a3 3 0 0 1-4.2-4.2l5.5-5.5a2 2 0 0 1 2.8 2.8l-5.5 5.5a1 1 0 0 1-1.4-1.4l4.8-4.8"
               stroke="currentColor"
@@ -239,7 +239,7 @@ defineExpose({
           @click="submit"
           aria-label="Launch"
         >
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none">
             <path
               d="M5 19c1.5-4 5-7.5 9-9 1.5 4-2 7.5-6 9-1 .25-2 0-3 0Z"
               fill="currentColor"
@@ -271,22 +271,22 @@ defineExpose({
 .input-shell {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   width: 100%;
-  max-width: 720px;
+  max-width: 560px;
   margin-inline: auto;
   transition: opacity 320ms ease;
 }
 @media (min-width: 1024px) {
   .input-shell {
-    max-width: 880px;
-    gap: 18px;
+    max-width: 600px;
+    gap: 12px;
   }
 }
 @media (min-width: 1536px) {
   .input-shell {
-    max-width: 1040px;
-    gap: 22px;
+    max-width: 660px;
+    gap: 14px;
   }
 }
 .input-shell.launching {
@@ -306,8 +306,8 @@ defineExpose({
   background: rgba(8, 12, 22, 0.65);
   backdrop-filter: blur(14px);
   border: 1px solid var(--color-hairline-strong);
-  border-radius: 14px;
-  padding: 4px 6px 10px 6px;
+  border-radius: 12px;
+  padding: 3px 5px 6px 5px;
   box-shadow:
     0 30px 80px -30px rgba(0, 0, 0, 0.6),
     0 0 60px -10px rgba(10, 18, 32, 0.5);
@@ -332,29 +332,29 @@ textarea {
   resize: vertical;
   color: var(--color-text-primary);
   font-family: var(--font-body);
-  font-size: 1.05rem;
+  font-size: 0.88rem;
   font-weight: 400;
-  line-height: 1.55;
-  padding: 14px 22px 14px 18px;
-  min-height: 96px;
-  max-height: 60vh;
+  line-height: 1.5;
+  padding: 10px 16px 10px 14px;
+  min-height: 64px;
+  max-height: 50vh;
   overflow-y: auto;
   box-sizing: border-box;
 }
 @media (min-width: 1024px) {
   textarea {
-    font-size: 1.2rem;
-    padding: 18px 26px 18px 22px;
-    min-height: 120px;
-    max-height: 65vh;
+    font-size: 0.92rem;
+    padding: 12px 18px 12px 16px;
+    min-height: 72px;
+    max-height: 55vh;
   }
 }
 @media (min-width: 1536px) {
   textarea {
-    font-size: 1.35rem;
-    padding: 22px 30px 22px 26px;
-    min-height: 140px;
-    max-height: 70vh;
+    font-size: 0.95rem;
+    padding: 14px 20px 14px 18px;
+    min-height: 80px;
+    max-height: 55vh;
   }
 }
 textarea::placeholder {
@@ -408,17 +408,17 @@ textarea::-webkit-scrollbar-thumb:hover {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 6px 8px 0 8px;
+  gap: 6px;
+  padding: 4px 6px 0 6px;
 }
 
 .icon-btn {
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
+  border-radius: 8px;
   background: transparent;
   color: var(--color-text-muted);
   border: 1px solid var(--color-hairline);
@@ -438,12 +438,12 @@ textarea::-webkit-scrollbar-thumb:hover {
 }
 
 .rocket-btn {
-  width: 44px;
-  height: 44px;
+  width: 34px;
+  height: 34px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 12px;
+  border-radius: 9px;
   border: 1px solid rgba(255, 181, 71, 0.18);
   background: linear-gradient(180deg, rgba(255, 181, 71, 0.12), rgba(255, 181, 71, 0.04));
   color: var(--color-text-muted);
@@ -498,20 +498,20 @@ textarea::-webkit-scrollbar-thumb:hover {
 
 @media (min-width: 1024px) {
   .icon-btn {
-    width: 44px;
-    height: 44px;
+    width: 34px;
+    height: 34px;
   }
   .rocket-btn {
-    width: 50px;
-    height: 50px;
+    width: 36px;
+    height: 36px;
   }
   .rocket-btn :deep(svg) {
-    width: 24px;
-    height: 24px;
+    width: 18px;
+    height: 18px;
   }
   .icon-btn :deep(svg) {
-    width: 22px;
-    height: 22px;
+    width: 16px;
+    height: 16px;
   }
 }
 

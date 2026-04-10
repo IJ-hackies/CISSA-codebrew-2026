@@ -114,13 +114,25 @@ export class GalaxyRenderer implements RendererPublicAPI {
     alpha: 1,
   }
 
-  // ── Black-hole launch state ─────────────────────────────────────────────
-  /** Vanishing point — center of the tunnel + spiral. */
+  // ── Launch state ────────────────────────────────────────────────────────
+  /** Vanishing point — center of the tunnel + star warp. */
   private vp = { x: 0, y: 0 }
-  /** Spiral state — radius, angle, angular speed. */
-  private spiral = { radius: 0, angle: 0, angularSpeed: 0 }
   /**
-   * Tunnel intensity — drives star streaks + inward acceleration. Owned
+   * Spiral — single motion system for the entire launch sequence.
+   * VP slides from button to center while the rocket orbits VP.
+   * Radius grows (entry), holds (cruise), then collapses (landing).
+   */
+  private spiral = {
+    radius: 0,
+    angle: 0,
+    angularSpeed: 0,
+  }
+  /** Warm bloom pulse at VP during landing. */
+  private landingBloom = { radius: 0, alpha: 0 }
+  /** Handle to the cruise shrink tween so landing can kill + accelerate. */
+  private cruiseShrinkTween: gsap.core.Tween | null = null
+  /**
+   * Tunnel intensity — drives star streaks + outward acceleration. Owned
    * by the launch sequence only. Independent of `parallaxBoost` so the
    * history overlay's `zoomOut()` doesn't accidentally warp the void.
    */
@@ -238,7 +250,11 @@ export class GalaxyRenderer implements RendererPublicAPI {
   }
 
   abortLaunch(): void {
-    gsap.killTweensOf([this.vp, this.spiral, this.rocket, this.tunnel])
+    gsap.killTweensOf([this.vp, this.rocket, this.tunnel, this.spiral, this.landingBloom])
+    if (this.cruiseShrinkTween) {
+      this.cruiseShrinkTween.kill()
+      this.cruiseShrinkTween = null
+    }
     this.rocket.active = false
     this.rocket.alpha = 1
     this.rocket.scale = 1
@@ -247,6 +263,8 @@ export class GalaxyRenderer implements RendererPublicAPI {
     this.spiral.radius = 0
     this.spiral.angle = 0
     this.spiral.angularSpeed = 0
+    this.landingBloom.radius = 0
+    this.landingBloom.alpha = 0
     this.tunnel.intensity = 0
     this.camera.shakeX = 0
     this.camera.shakeY = 0
@@ -279,82 +297,87 @@ export class GalaxyRenderer implements RendererPublicAPI {
   }
 
   /**
-   * Black-hole launch sequence. Phases:
-   *   0. (400ms)  vanishing point + rocket lerp from click → screen center
-   *   1. (1100ms) entry spiral — scale 0.15→1.4, radius 0→max, tunnel ramps
-   *   2. (≥3000ms) steady-state hold — constant scale, constant radius
+   * Launch sequence — the rocket starts orbiting at screen center
+   * immediately, fading in behind the UI stage fade-out. No entry
+   * animation, no position transitions, works on every screen size.
    *
-   * Resolves at the end of phase 1 (when cruise begins). Caller waits, then
-   * calls landRocket() which plays phase 3.
+   * The .launching CSS class fades the UI over ~900ms. During that
+   * window the rocket, tunnel, and spiral all ramp up. By the time the
+   * UI is gone the spiral is already running smoothly.
+   *
+   * Resolves when the ramp-up is done and cruise begins.
    */
-  launchRocket(originCanvasPx: { x: number; y: number }): Promise<void> {
+  launchRocket(_originCanvasPx: { x: number; y: number }): Promise<void> {
     return new Promise((resolve) => {
-      // Reset state.
+      const centerX = this.width / 2
+      const centerY = this.height / 2
+      const spiralRadius = Math.min(160, Math.min(this.width, this.height) * 0.12)
+
+      // Place everything at center immediately.
+      this.vp.x = centerX
+      this.vp.y = centerY
+      this.spiral.angle = 0
+      this.spiral.angularSpeed = -(Math.PI * 2) / 2.2 // counter-clockwise
+      this.spiral.radius = spiralRadius
+
+      // Rocket starts invisible, fades in during the UI fade-out.
       this.rocket.active = true
-      this.rocket.alpha = 1
-      this.rocket.scale = 0.15
+      this.rocket.alpha = 0
+      this.rocket.scale = 1.4
       this.rocket.flame = 0
       this.rocket.bloom = 0
-      this.rocket.x = originCanvasPx.x
-      this.rocket.y = originCanvasPx.y
-      this.spiral.radius = 0
-      this.spiral.angle = 0
-      this.spiral.angularSpeed = 0
-      this.vp.x = originCanvasPx.x
-      this.vp.y = originCanvasPx.y
+      this.rocket.x = centerX + spiralRadius
+      this.rocket.y = centerY
+      this.landingBloom.radius = 0
+      this.landingBloom.alpha = 0
       this.phase = 'launch'
 
-      // Reset star tunnel offsets so the streaks start clean.
+      // Reset star tunnel offsets.
       for (const s of this.stars) {
         s.tunnelOffsetX = 0
         s.tunnelOffsetY = 0
       }
 
-      const centerX = this.width / 2
-      const centerY = this.height / 2
-      const orbitRadius = Math.min(240, Math.max(120, Math.min(this.width, this.height) * 0.16))
-      const angularP1 = (Math.PI * 2) / 0.8 // ~0.8s/rev = ~7.85 rad/s
-      const angularP2 = (Math.PI * 2) / 2.0 // ~2s/rev = ~3.14 rad/s
-
-      // Kill any prior tweens on these targets.
-      gsap.killTweensOf([this.vp, this.spiral, this.rocket, this.tunnel])
+      // Kill any prior tweens.
+      gsap.killTweensOf([this.vp, this.rocket, this.tunnel, this.spiral])
+      if (this.cruiseShrinkTween) {
+        this.cruiseShrinkTween.kill()
+        this.cruiseShrinkTween = null
+      }
 
       const tl = gsap.timeline({
         onComplete: () => {
+          this.phase = 'cruise'
           this.cruiseStartedAt = this.elapsed
+
+          // Start the slow shrink to a visible minimum.
+          const cruiseBloom = Math.min(22, Math.min(this.width, this.height) * 0.03)
+          this.cruiseShrinkTween = gsap.to(this.rocket, {
+            scale: 0.7,
+            bloom: cruiseBloom,
+            duration: 15,
+            ease: 'power2.in',
+          })
+
           resolve()
         },
       })
 
-      // ── Phase 0: vanishing point slide (400ms) ──────────────────────────
-      tl.to(
-        this.vp,
-        { x: centerX, y: centerY, duration: 0.4, ease: 'power2.inOut' },
-        0,
-      )
-      tl.to(this.tunnel, { intensity: 0.5, duration: 0.4, ease: 'power2.out' }, 0)
-      tl.to(this.rocket, { flame: 0.6, bloom: 50, duration: 0.4, ease: 'power2.out' }, 0)
-
-      // ── Phase 1: entry spiral (1100ms) ──────────────────────────────────
-      tl.to(
-        this.spiral,
-        { radius: orbitRadius, angularSpeed: angularP1, duration: 1.1, ease: 'power2.out' },
-        0.4,
-      )
+      // ── Ramp up behind the UI fade (~1s) ───────────────────────────────
+      // Scale bloom to viewport — large on desktop, restrained on mobile.
+      const bloomSize = Math.min(50, Math.min(this.width, this.height) * 0.06)
+      // Rocket fades in + ignites (timed to appear as UI fades out).
       tl.to(
         this.rocket,
-        { scale: 1.4, flame: 1, bloom: 110, duration: 1.1, ease: 'power2.out' },
-        0.4,
+        { alpha: 1, flame: 1, bloom: bloomSize, duration: 0.8, ease: 'power2.out' },
+        0.3, // slight delay so the UI is already partially faded
       )
-      tl.to(this.tunnel, { intensity: 3.0, duration: 1.1, ease: 'power2.in' }, 0.4)
-
-      // ── Phase 2 entry: ease the angular speed down to steady-state ──────
+      // Tunnel ramps up.
       tl.to(
-        this.spiral,
-        { angularSpeed: angularP2, duration: 0.6, ease: 'power2.inOut' },
-        1.5,
+        this.tunnel,
+        { intensity: 3.5, duration: 1.0, ease: 'power2.in' },
+        0,
       )
-      tl.to(this.tunnel, { intensity: 3.5, duration: 0.6, ease: 'sine.inOut' }, 1.5)
     })
   }
 
@@ -383,27 +406,45 @@ export class GalaxyRenderer implements RendererPublicAPI {
 
   private playLandingPhases(resolve: () => void): void {
     this.phase = 'land'
-    const angularP3 = (Math.PI * 2) / 0.8 // back to ~0.8s/rev for the exit
+
+    // Kill the cruise shrink — we take over with an accelerated version.
+    if (this.cruiseShrinkTween) {
+      this.cruiseShrinkTween.kill()
+      this.cruiseShrinkTween = null
+    }
+
+    const bloomMax = Math.min(200, Math.min(this.width, this.height) * 0.2)
+
     const tl = gsap.timeline({
       onComplete: () => {
         this.phase = 'arrived'
         this.rocket.active = false
+        this.landingBloom.radius = 0
+        this.landingBloom.alpha = 0
         resolve()
       },
     })
 
-    // ── Phase 3a: shrink (700ms) ──────────────────────────────────────────
-    tl.to(this.spiral, { angularSpeed: angularP3, duration: 0.5, ease: 'power2.in' }, 0)
+    // ── Rocket shrink to zero + fade (700ms) ──────────────────────────────
     tl.to(
       this.rocket,
-      { scale: 0.2, flame: 0.4, bloom: 30, duration: 0.7, ease: 'power2.in' },
+      { scale: 0.05, alpha: 0, flame: 0, bloom: 0, duration: 0.7, ease: 'power2.in' },
       0,
     )
-    tl.to(this.tunnel, { intensity: 2.2, duration: 0.7, ease: 'sine.inOut' }, 0)
 
-    // ── Phase 3b: fade (600ms) ────────────────────────────────────────────
-    tl.to(this.rocket, { alpha: 0, flame: 0, bloom: 0, duration: 0.6, ease: 'power2.in' }, 0.7)
-    tl.to(this.tunnel, { intensity: 0, duration: 0.6, ease: 'power2.out' }, 0.7)
+    // ── Warm bloom pulse at VP (appears as rocket vanishes) ──────────────
+    tl.fromTo(
+      this.landingBloom,
+      { radius: 10, alpha: 0.5 },
+      { radius: bloomMax, alpha: 0, duration: 0.5, ease: 'power2.out' },
+      0.2,
+    )
+
+    // ── Tunnel winds down during the bloom ───────────────────────────────
+    tl.to(this.tunnel, { intensity: 0, duration: 0.7, ease: 'power2.out' }, 0)
+
+    // ── Spiral tightens fast so the vanishing rocket converges on VP ─────
+    tl.to(this.spiral, { radius: 0, duration: 0.5, ease: 'power2.in' }, 0)
   }
 
   getPhase(): RendererPhase {
@@ -550,31 +591,30 @@ export class GalaxyRenderer implements RendererPublicAPI {
     }
 
     // ── Tunnel star motion (driven by tunnel.intensity) ──────────────────
-    // Owned exclusively by the launch sequence — history overlay's
-    // zoomOut/zoomIn no longer touch this.
+    // Stars flow OUTWARD from the vanishing point — hyperspace effect.
+    // Stars that leave the screen respawn near VP.
     const tInt = this.tunnel.intensity
     if (tInt > 0.05) {
-      const speed = tInt * 380 // px/sec at intensity = 2; ~1330 at peak ≈ 3.5
-      const wrapDist = Math.hypot(this.width, this.height) * 0.55
+      const speed = tInt * 380
       for (const s of this.stars) {
         const baseX = s.x * this.width
         const baseY = s.y * this.height
         const px = baseX + s.tunnelOffsetX
         const py = baseY + s.tunnelOffsetY
-        const dx = this.vp.x - px
-        const dy = this.vp.y - py
+        const dx = px - this.vp.x
+        const dy = py - this.vp.y
         const d = Math.hypot(dx, dy) || 1
-        // Move inward.
+        // Move outward (away from VP).
         const ux = dx / d
         const uy = dy / d
         s.tunnelOffsetX += ux * speed * dt
         s.tunnelOffsetY += uy * speed * dt
-        // Wrap if reached the vanishing point.
-        if (d < 6) {
-          // Pick a random direction outward and place at wrapDist from VP.
+        // Wrap if star left the screen — respawn near VP.
+        if (px < -60 || py < -60 || px > this.width + 60 || py > this.height + 60) {
           const angle = Math.random() * Math.PI * 2
-          const wx = this.vp.x + Math.cos(angle) * wrapDist
-          const wy = this.vp.y + Math.sin(angle) * wrapDist
+          const nearDist = 15 + Math.random() * 35
+          const wx = this.vp.x + Math.cos(angle) * nearDist
+          const wy = this.vp.y + Math.sin(angle) * nearDist
           s.tunnelOffsetX = wx - baseX
           s.tunnelOffsetY = wy - baseY
         }
@@ -592,20 +632,16 @@ export class GalaxyRenderer implements RendererPublicAPI {
       }
     }
 
-    // ── Spiral integration (rocket position + rotation) ──────────────────
+    // ── Rocket position + rotation (single spiral system) ──────────────────
     if (this.rocket.active) {
       this.spiral.angle += this.spiral.angularSpeed * dt
       const cosA = Math.cos(this.spiral.angle)
       const sinA = Math.sin(this.spiral.angle)
       this.rocket.x = this.vp.x + cosA * this.spiral.radius
       this.rocket.y = this.vp.y + sinA * this.spiral.radius
-      // Tangent direction along the orbit (counter-clockwise).
-      // Velocity = R * dθ/dt * (-sin, cos). The drawRocket() helper treats
-      // `rotation` as the angle whose (cos, sin) IS the nose direction —
-      // so set rotation to atan2 of the velocity vector.
-      const vx = -sinA
-      const vy = cosA
-      this.rocket.rotation = Math.atan2(vy, vx)
+      // Velocity for negative ω: (sinθ·|ω|·r, -cosθ·|ω|·r).
+      // Nose follows the velocity direction.
+      this.rocket.rotation = Math.atan2(-cosA, sinA)
     }
 
     // Faster slow drift on nebulae — adds ambient life.
@@ -632,24 +668,26 @@ export class GalaxyRenderer implements RendererPublicAPI {
       if (ss.life >= ss.maxLife) this.shootingStars.splice(i, 1)
     }
 
-    // Rocket particles.
+    // Rocket particles — size, speed, and count scale with rocket + viewport.
     if (this.rocket.active && this.rocket.flame > 0.05) {
-      const emit = Math.floor(this.rocket.flame * 4)
+      const sc = this.rocket.scale
+      const screenScale = Math.min(1, Math.min(this.width, this.height) / 800)
+      const emit = Math.floor(this.rocket.flame * 4 * screenScale)
       for (let i = 0; i < emit; i++) {
         const sin = Math.sin(this.rocket.rotation)
         const cos = Math.cos(this.rocket.rotation)
-        const ex = this.rocket.x - cos * 14 * this.rocket.scale
-        const ey = this.rocket.y - sin * 14 * this.rocket.scale
+        const ex = this.rocket.x - cos * 14 * sc
+        const ey = this.rocket.y - sin * 14 * sc
         const spread = (Math.random() - 0.5) * 0.6
-        const speed = 50 + Math.random() * 80
+        const speed = (50 + Math.random() * 80) * sc
         this.rocketParticles.push({
           x: ex,
           y: ey,
-          vx: -cos * speed + sin * spread * 30,
-          vy: -sin * speed - cos * spread * 30,
+          vx: -cos * speed + sin * spread * 30 * sc,
+          vy: -sin * speed - cos * spread * 30 * sc,
           life: 0,
-          maxLife: 0.6 + Math.random() * 0.5,
-          size: 1.5 + Math.random() * 2.5,
+          maxLife: (0.6 + Math.random() * 0.5) * sc,
+          size: (1.5 + Math.random() * 2.5) * sc,
         })
       }
     }
@@ -733,26 +771,26 @@ export class GalaxyRenderer implements RendererPublicAPI {
       }
 
       if (tunnelActive) {
-        // Elongated streak from sx,sy outward (away from vp).
+        // Streak trails behind the star (toward VP) — hyperspace effect.
         const dx = sx - this.vp.x
         const dy = sy - this.vp.y
         const d = Math.hypot(dx, dy) || 1
         const ux = dx / d
         const uy = dy / d
-        // Streak length scales with both boost and distance from VP
-        // (further stars streak more, like real warp).
+        // Streak length scales with distance from VP (further = longer).
         const streakLen = streakStrength * Math.min(140, 18 + d * 0.18)
-        const tailX = sx + ux * streakLen
-        const tailY = sy + uy * streakLen
-        const grad2 = ctx.createLinearGradient(sx, sy, tailX, tailY)
-        grad2.addColorStop(0, `rgba(232, 236, 242, ${alpha})`)
-        grad2.addColorStop(1, 'rgba(232, 236, 242, 0)')
+        // Trail points toward VP (behind the star's outward motion).
+        const trailX = sx - ux * streakLen
+        const trailY = sy - uy * streakLen
+        const grad2 = ctx.createLinearGradient(trailX, trailY, sx, sy)
+        grad2.addColorStop(0, 'rgba(232, 236, 242, 0)')
+        grad2.addColorStop(1, `rgba(232, 236, 242, ${alpha})`)
         ctx.strokeStyle = grad2
         ctx.lineWidth = Math.max(0.6, s.size * 0.9)
         ctx.lineCap = 'round'
         ctx.beginPath()
-        ctx.moveTo(sx, sy)
-        ctx.lineTo(tailX, tailY)
+        ctx.moveTo(trailX, trailY)
+        ctx.lineTo(sx, sy)
         ctx.stroke()
       } else {
         ctx.fillStyle = `rgba(232, 236, 242, ${alpha})`
@@ -837,6 +875,19 @@ export class GalaxyRenderer implements RendererPublicAPI {
 
       this.drawRocket()
       ctx.restore()
+    }
+
+    // 8. Landing bloom pulse — warm glow expanding from VP as rocket vanishes.
+    if (this.landingBloom.alpha > 0.01) {
+      const bg = ctx.createRadialGradient(
+        this.vp.x, this.vp.y, 0,
+        this.vp.x, this.vp.y, this.landingBloom.radius,
+      )
+      bg.addColorStop(0, `rgba(255, 211, 128, ${this.landingBloom.alpha * 0.6})`)
+      bg.addColorStop(0.4, `rgba(255, 181, 71, ${this.landingBloom.alpha * 0.3})`)
+      bg.addColorStop(1, 'rgba(255, 181, 71, 0)')
+      ctx.fillStyle = bg
+      ctx.fillRect(0, 0, w, h)
     }
   }
 

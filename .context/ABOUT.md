@@ -66,7 +66,7 @@ Division of labor: realtime owns everything the user touches more than once; pre
 
 ## Tech Stack
 
-**Frontend.** Vue 3 + Vite + TypeScript, Tailwind v4 (CSS-first config, no `tailwind.config.js`), Vue Router (`/galaxy/:id`, `/galaxy/:id/planet/:planetId`). Rendering: HTML Canvas for the starfield, SVG for interactive scene elements. Motion stack as above (GSAP + Motion for Vue + Rive + Lottie + ogl for the WebGL post pass — deliberately skipping Three.js unless we need true 3D).
+**Frontend.** Vue 3 + Vite + TypeScript, Tailwind v4 (CSS-first config, no `tailwind.config.js`), Vue Router. Live routes: `/` (chat landing), `/galaxy/:id` (skill tree), `/galaxy/:id/planet/:subtopicId` (planet + orbiting moons), `/galaxy/:id/concept/:conceptId` (study card + challenge), `/galaxy/:id/stats` (progress dashboard). Rendering: HTML Canvas for the starfield, SVG for interactive scene elements (planet spheres, constellation nodes, progress arcs). Motion stack as above (GSAP + Motion for Vue + Rive + Lottie + ogl for the WebGL post pass — deliberately skipping Three.js; all planet/orbit rendering is SVG + CSS animation).
 
 **Backend.** Bun + Hono + TypeScript, split into two deployables:
 
