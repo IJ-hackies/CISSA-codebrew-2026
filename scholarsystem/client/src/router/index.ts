@@ -9,7 +9,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/galaxy/:id',
     name: 'galaxy',
-    component: () => import('@/pages/SkillTree.vue'),
+    component: () => import('@/pages/GalaxyMap.vue'),
   },
   {
     path: '/galaxy/:id/planet/:subtopicId',
@@ -25,6 +25,12 @@ const routes: RouteRecordRaw[] = [
     path: '/galaxy/:id/stats',
     name: 'stats',
     component: () => import('@/pages/StatsView.vue'),
+  },
+  // Catch-all: redirect any unknown URL to home rather than falling through
+  // to whatever the dev/prod server might serve (old assets, 404 pages, etc.)
+  {
+    path: '/:pathMatch(.*)*',
+    redirect: '/',
   },
 ]
 

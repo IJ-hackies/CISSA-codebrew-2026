@@ -23,6 +23,8 @@ const props = defineProps<{
   hovered: boolean
   /** Scale factor for labels — at higher zoom levels, labels need smaller font. */
   labelScale: number
+  /** When true the parent group is rotated 90°; counter-rotate labels so they stay readable. */
+  rotated?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -70,13 +72,36 @@ function asteroidPath(cx: number, cy: number, r: number): string {
     @pointerleave="emit('pointerleave', body)"
   >
     <defs>
-      <radialGradient :id="gradId">
-        <stop offset="0%" :stop-color="palette.accent" stop-opacity="0.9" />
-        <stop offset="50%" :stop-color="palette.primary" stop-opacity="0.85" />
-        <stop offset="100%" :stop-color="palette.secondary" stop-opacity="0.6" />
+      <!-- Sphere gradient: bright accent centre → dark secondary edge (upper-left lit) -->
+      <radialGradient :id="gradId" cx="38%" cy="35%" r="60%">
+        <stop offset="0%"   :stop-color="palette.accent"    stop-opacity="1"   />
+        <stop offset="45%"  :stop-color="palette.primary"   stop-opacity="0.95"/>
+        <stop offset="100%" :stop-color="palette.secondary"  stop-opacity="0.8" />
       </radialGradient>
-      <filter :id="glowId">
-        <feGaussianBlur stdDeviation="3" result="blur" />
+
+      <!-- Shadow mask — dark crescent on lower-right for sphere shading -->
+      <radialGradient :id="`shadow-${body.id}`" cx="68%" cy="65%" r="55%">
+        <stop offset="0%"   stop-color="#000" stop-opacity="0.55"/>
+        <stop offset="100%" stop-color="#000" stop-opacity="0"   />
+      </radialGradient>
+
+      <!-- Clip to planet disc -->
+      <clipPath :id="`clip-${body.id}`">
+        <circle :cx="body.position.x" :cy="body.position.y" :r="body.radius * 0.22" />
+      </clipPath>
+
+      <!-- Wide soft bloom for system halos -->
+      <filter :id="`${glowId}-wide`" x="-150%" y="-150%" width="400%" height="400%">
+        <feGaussianBlur stdDeviation="12" result="blur" />
+        <feMerge>
+          <feMergeNode in="blur" />
+          <feMergeNode in="blur" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+      <!-- Tight bloom for stars, planets, moons -->
+      <filter :id="glowId" x="-80%" y="-80%" width="260%" height="260%">
+        <feGaussianBlur stdDeviation="4" result="blur" />
         <feMerge>
           <feMergeNode in="blur" />
           <feMergeNode in="SourceGraphic" />
@@ -103,54 +128,182 @@ function asteroidPath(cx: number, cy: number, r: number): string {
       />
     </template>
 
-    <!-- ─── System (galaxy zoom level) ────────────────────────── -->
+    <!-- ─── System / planet node (galaxy zoom level) ──────────── -->
     <template v-else-if="body.kind === 'system'">
+      <!-- Layer 1: wide diffuse nebula cloud -->
       <circle
-        :cx="body.position.x"
-        :cy="body.position.y"
-        :r="body.radius * 0.2"
+        :cx="body.position.x" :cy="body.position.y"
+        :r="body.radius * 0.72"
         :fill="palette.atmosphere"
-        class="system-aura"
+        class="system-halo-outer"
       />
+
+      <!-- Layer 2: mid atmospheric glow -->
       <circle
-        :cx="body.position.x"
-        :cy="body.position.y"
-        :r="body.radius * 0.12"
-        :fill="`url(#${gradId})`"
-        :filter="`url(#${glowId})`"
-        class="system-core"
+        :cx="body.position.x" :cy="body.position.y"
+        :r="body.radius * 0.34"
+        :fill="palette.primary"
+        opacity="0.40"
+        class="system-halo-mid"
       />
+
+      <!-- Layer 3: bloom behind the sphere (soft) -->
+      <circle
+        :cx="body.position.x" :cy="body.position.y"
+        :r="body.radius * 0.22"
+        :fill="`url(#${gradId})`"
+        :filter="`url(#${glowId}-wide)`"
+        opacity="0.7"
+      />
+
+      <!-- Layer 4: planet sphere with surface detail (clipped) -->
+      <g :clip-path="`url(#clip-${body.id})`">
+        <!-- Base sphere -->
+        <circle
+          :cx="body.position.x" :cy="body.position.y"
+          :r="body.radius * 0.22"
+          :fill="`url(#${gradId})`"
+        />
+        <!-- Surface bands (simulates gas-giant / continental detail) -->
+        <ellipse
+          :cx="body.position.x"
+          :cy="body.position.y - body.radius * 0.04"
+          :rx="body.radius * 0.22" :ry="body.radius * 0.026"
+          :fill="palette.accent" opacity="0.25"
+        />
+        <ellipse
+          :cx="body.position.x"
+          :cy="body.position.y + body.radius * 0.07"
+          :rx="body.radius * 0.22" :ry="body.radius * 0.020"
+          :fill="palette.secondary" opacity="0.35"
+        />
+        <ellipse
+          :cx="body.position.x"
+          :cy="body.position.y + body.radius * 0.14"
+          :rx="body.radius * 0.22" :ry="body.radius * 0.024"
+          :fill="palette.accent" opacity="0.20"
+        />
+        <!-- Shadow (lower-right crescent) -->
+        <circle
+          :cx="body.position.x" :cy="body.position.y"
+          :r="body.radius * 0.22"
+          :fill="`url(#shadow-${body.id})`"
+        />
+        <!-- Specular highlight (upper-left) -->
+        <ellipse
+          :cx="body.position.x - body.radius * 0.06"
+          :cy="body.position.y - body.radius * 0.07"
+          :rx="body.radius * 0.10" :ry="body.radius * 0.07"
+          fill="rgba(255,255,255,0.20)"
+        />
+      </g>
+
+      <!-- Layer 5: atmospheric rim ring -->
+      <circle
+        :cx="body.position.x" :cy="body.position.y"
+        :r="body.radius * 0.22"
+        fill="none"
+        :stroke="palette.atmosphere"
+        :stroke-width="body.radius * 0.032"
+        opacity="0.85"
+        class="system-atm-rim"
+      />
+
+      <!-- Layer 6: 8-point diffraction spikes (star-like lens flare) -->
+      <g class="system-spike" opacity="0.32">
+        <!-- Cardinal -->
+        <line
+          :x1="body.position.x - body.radius * 0.40" :y1="body.position.y"
+          :x2="body.position.x + body.radius * 0.40" :y2="body.position.y"
+          stroke="white" :stroke-width="body.radius * 0.007" stroke-linecap="round"
+        />
+        <line
+          :x1="body.position.x" :y1="body.position.y - body.radius * 0.40"
+          :x2="body.position.x" :y2="body.position.y + body.radius * 0.40"
+          stroke="white" :stroke-width="body.radius * 0.007" stroke-linecap="round"
+        />
+        <!-- Diagonal (dimmer) -->
+        <line
+          :x1="body.position.x - body.radius * 0.26" :y1="body.position.y - body.radius * 0.26"
+          :x2="body.position.x + body.radius * 0.26" :y2="body.position.y + body.radius * 0.26"
+          stroke="white" :stroke-width="body.radius * 0.005" stroke-linecap="round" opacity="0.6"
+        />
+        <line
+          :x1="body.position.x + body.radius * 0.26" :y1="body.position.y - body.radius * 0.26"
+          :x2="body.position.x - body.radius * 0.26" :y2="body.position.y + body.radius * 0.26"
+          stroke="white" :stroke-width="body.radius * 0.005" stroke-linecap="round" opacity="0.6"
+        />
+      </g>
     </template>
 
-    <!-- ─── Planet ────────────────────────────────────────────── -->
+    <!-- ─── Planet (system zoom) ─────────────────────────────── -->
     <template v-else-if="body.kind === 'planet'">
-      <!-- Atmosphere halo -->
+      <defs>
+        <clipPath :id="`clip-${body.id}`">
+          <circle :cx="body.position.x" :cy="body.position.y" :r="body.radius" />
+        </clipPath>
+      </defs>
+
+      <!-- Atmosphere glow -->
       <circle
-        :cx="body.position.x"
-        :cy="body.position.y"
-        :r="body.radius * 1.6"
+        :cx="body.position.x" :cy="body.position.y"
+        :r="body.radius * 1.55"
         :fill="palette.atmosphere"
         class="planet-atmo"
       />
-      <!-- Ring (if applicable) -->
+
+      <!-- Ring behind planet -->
       <ellipse
         v-if="(visual as PlanetVisual)?.ring"
-        :cx="body.position.x"
-        :cy="body.position.y"
-        :rx="body.radius * 1.8"
-        :ry="body.radius * 0.4"
+        :cx="body.position.x" :cy="body.position.y"
+        :rx="body.radius * 1.85" :ry="body.radius * 0.38"
         fill="none"
-        :stroke="palette.accent"
-        stroke-opacity="0.4"
-        :stroke-width="body.radius * 0.12"
+        :stroke="palette.accent" stroke-opacity="0.35"
+        :stroke-width="body.radius * 0.14"
       />
-      <!-- Body -->
+
+      <!-- Planet sphere with detail (clipped) -->
+      <g :clip-path="`url(#clip-${body.id})`">
+        <circle
+          :cx="body.position.x" :cy="body.position.y"
+          :r="body.radius" :fill="`url(#${gradId})`"
+          class="planet-surface"
+        />
+        <!-- Surface bands -->
+        <ellipse
+          :cx="body.position.x" :cy="body.position.y - body.radius * 0.15"
+          :rx="body.radius" :ry="body.radius * 0.10"
+          :fill="palette.accent" opacity="0.18"
+        />
+        <ellipse
+          :cx="body.position.x" :cy="body.position.y + body.radius * 0.25"
+          :rx="body.radius" :ry="body.radius * 0.08"
+          :fill="palette.secondary" opacity="0.25"
+        />
+        <!-- Shadow crescent -->
+        <circle
+          :cx="body.position.x" :cy="body.position.y"
+          :r="body.radius"
+          :fill="`url(#shadow-${body.id})`"
+        />
+        <!-- Specular highlight -->
+        <ellipse
+          :cx="body.position.x - body.radius * 0.25"
+          :cy="body.position.y - body.radius * 0.28"
+          :rx="body.radius * 0.35" :ry="body.radius * 0.22"
+          fill="rgba(255,255,255,0.15)"
+        />
+      </g>
+
+      <!-- Atmospheric rim -->
       <circle
-        :cx="body.position.x"
-        :cy="body.position.y"
+        :cx="body.position.x" :cy="body.position.y"
         :r="body.radius"
-        :fill="`url(#${gradId})`"
-        class="planet-surface"
+        fill="none"
+        :stroke="palette.atmosphere"
+        :stroke-width="body.radius * 0.12"
+        opacity="0.7"
+        class="planet-rim"
       />
     </template>
 
@@ -295,6 +448,9 @@ function asteroidPath(cx: number, cy: number, r: number): string {
       font-weight="500"
       :fill="hovered ? '#fff' : body.kind === 'system' ? 'var(--color-text-primary)' : 'var(--color-text-muted)'"
       :opacity="hovered ? 1 : 0.85"
+      :transform="rotated
+        ? `rotate(-90, ${body.position.x}, ${body.position.y + body.radius + 6 * labelScale})`
+        : undefined"
       class="body-label"
     >
       {{ label }}
@@ -337,13 +493,34 @@ function asteroidPath(cx: number, cy: number, r: number): string {
   to { opacity: 1; }
 }
 
-.system-aura {
-  opacity: 0.08;
+.system-halo-outer {
+  opacity: 0.12;
+  animation: system-breathe 5s ease-in-out infinite alternate;
   transition: opacity 300ms ease;
 }
-.body-node.hovered .system-aura {
-  opacity: 0.15;
+.system-halo-mid {
+  animation: system-breathe 5s ease-in-out infinite alternate-reverse;
+  transition: opacity 300ms ease;
 }
+.body-node.hovered .system-halo-outer { opacity: 0.22; }
+.body-node.hovered .system-halo-mid   { opacity: 0.65; }
+.body-node.hovered .system-spike      { opacity: 0.55; }
+.body-node.hovered .system-atm-rim    { opacity: 1; }
+
+.system-atm-rim { transition: opacity 250ms ease; }
+.system-spike   { pointer-events: none; transition: opacity 250ms ease; }
+
+@keyframes system-breathe {
+  from { opacity: 0.09; }
+  to   { opacity: 0.17; }
+}
+
+.planet-rim { pointer-events: none; }
+.planet-atmo {
+  opacity: 0.18;
+  transition: opacity 300ms ease;
+}
+.body-node.hovered .planet-atmo { opacity: 0.32; }
 
 .planet-atmo {
   opacity: 0.15;

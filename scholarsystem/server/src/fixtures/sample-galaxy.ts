@@ -14,7 +14,7 @@ const now = Date.now();
 
 const GEO = {
   galaxyRadius: 900,
-  systemSpacing: 500,      // horizontal spacing between systems
+  systemSpacing: 310,      // tighter spacing — keeps aspect ratio sane
   systemRadius: 240,
   starRadius: 30,
   planetRingRadius: 120,
@@ -411,9 +411,9 @@ vis[rootId] = {
 };
 
 TOPICS.forEach((topic, ti) => {
-  // Horizontal linear layout with gentle sine wave for organic feel
-  const sx = Math.round(startX + ti * GEO.systemSpacing);
-  const sy = Math.round(Math.sin(ti * 0.7) * 60);
+  // Organic galaxy arm layout — compound sine waves so no two systems share the same height
+  const sx = Math.round(startX + ti * GEO.systemSpacing + Math.sin(ti * 1.6) * 28);
+  const sy = Math.round(Math.sin(ti * 0.85) * 280 + Math.sin(ti * 1.9 + 1.2) * 75);
   const systemId = `w1-sys-${topic.id.replace("w1-", "")}`;
   const starId = `w1-star-${topic.id.replace("w1-", "")}`;
   const pal = TOPIC_PALETTES[ti];
@@ -790,7 +790,7 @@ const raw = {
   narrative,
 
   spatial: {
-    bounds: { minX: Math.round(-totalWidth / 2 - 400), minY: -400, maxX: Math.round(totalWidth / 2 + 400), maxY: 400 },
+    bounds: { minX: Math.round(-totalWidth / 2 - 200), minY: -430, maxX: Math.round(totalWidth / 2 + 200), maxY: 430 },
     bodies,
   },
 

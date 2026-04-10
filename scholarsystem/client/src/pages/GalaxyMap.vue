@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import GalaxyRenderer from '@/components/GalaxyRenderer.vue'
 import BodyNode from '@/components/galaxy/BodyNode.vue'
 import WarpLane from '@/components/galaxy/WarpLane.vue'
@@ -17,8 +17,9 @@ import type {
 } from '@/types/galaxy'
 
 const route = useRoute()
+const router = useRouter()
 const isMobile = useIsMobile()
-const { galaxy, loadGalaxy } = useGalaxyStore()
+const { galaxy, loadGalaxy, saveCameraState, restoreCameraState } = useGalaxyStore()
 const rendererRef = ref<InstanceType<typeof GalaxyRenderer> | null>(null)
 
 // ─── Data loading ────────────────────────────────────────────────────
@@ -38,6 +39,14 @@ onMounted(async () => {
     }
   }
   loading.value = false
+
+  // Restore camera state if returning from a concept scene.
+  const saved = restoreCameraState()
+  if (saved) {
+    // Wait a tick so spatial watch has initialized the viewBox first.
+    await new Promise((r) => setTimeout(r, 0))
+    restoreState(saved)
+  }
 })
 
 // ─── Derived data ────────────────────────────────────────────────────
@@ -92,12 +101,15 @@ const {
   focusedSystemId,
   focusedPlanetId,
   viewBox,
+  isPortrait,
   drillIntoSystem,
   drillIntoPlanet,
   zoomToGalaxy,
   zoomToSystem,
   zoomUp,
   navigateTo,
+  getState,
+  restoreState,
   onPointerDown,
   onPointerMove,
   onPointerUp,
@@ -168,10 +180,18 @@ const trailPath = computed(() => {
   if (zoomLevel.value !== 'galaxy') return ''
   const systems = (spatial.value?.bodies ?? [])
     .filter((b) => b.kind === 'system')
-    .sort((a, b) => a.position.x - b.position.x) // left to right
+    .sort((a, b) => a.position.x - b.position.x)
   if (systems.length < 2) return ''
-  const pts = systems.map((s) => `${s.position.x},${s.position.y}`)
-  return `M${pts.join(' L')}`
+  // Smooth cubic bezier — control points halfway between adjacent systems on x,
+  // staying at each system's own y so the curve flows naturally through each star.
+  let d = `M${systems[0].position.x},${systems[0].position.y}`
+  for (let i = 1; i < systems.length; i++) {
+    const prev = systems[i - 1].position
+    const curr = systems[i].position
+    const cpX = (prev.x + curr.x) / 2
+    d += ` C${cpX},${prev.y} ${cpX},${curr.y} ${curr.x},${curr.y}`
+  }
+  return d
 })
 
 // ─── Warp lanes (only at planet zoom level) ──────────────────────────
@@ -261,19 +281,28 @@ function isVisited(body: Body): boolean {
 
 // ─── Body click handling ─────────────────────────────────────────────
 
+function getRenderer() {
+  return rendererRef.value?.getRenderer() ?? null
+}
+
 function onBodyClick(body: Body) {
   switch (body.kind) {
     case 'system':
+      getRenderer()?.warp()
       drillIntoSystem(body.id)
       break
     case 'planet':
+      getRenderer()?.warp()
       drillIntoPlanet(body.id)
       break
     case 'moon':
-    case 'asteroid':
-      // TODO: Enter scene view (Tier 2)
-      console.log('[galaxy-map] would enter scene for', body.id)
+    case 'asteroid': {
+      saveCameraState(getState())
+      const galaxyId = route.params.id as string
+      const conceptId = 'knowledgeRef' in body && body.knowledgeRef ? body.knowledgeRef : body.id
+      router.push({ name: 'concept', params: { id: galaxyId, conceptId } })
       break
+    }
   }
 }
 
@@ -326,83 +355,104 @@ function onHudNavigate(level: ZoomLevel, id?: string) {
     <svg
       v-else-if="spatial"
       class="map-svg"
+      :class="{ 'is-dragging': false }"
       :viewBox="viewBox"
       preserveAspectRatio="xMidYMid meet"
+      style="touch-action: none; user-select: none;"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
-      @pointerleave="onPointerUp"
       @wheel.prevent="onWheel"
       @click="onBackgroundClick"
     >
-      <!-- Trail path connecting systems left-to-right -->
-      <path
-        v-if="trailPath"
-        :d="trailPath"
-        fill="none"
-        stroke="rgba(255,255,255,0.06)"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        stroke-dasharray="12 8"
-        class="trail-path"
-      />
+      <!--
+        Portrait: rotate the entire content 90° so the galaxy arm runs
+        top-to-bottom. Labels are counter-rotated inside BodyNode.
+        Landscape: no transform needed.
+      -->
+      <g :transform="isPortrait && zoomLevel === 'galaxy' ? 'rotate(90)' : ''">
 
-      <!-- Warp lanes (planet zoom only) -->
-      <WarpLane
-        v-for="(lane, i) in visibleLanes"
-        :key="`lane-${i}`"
-        :from="lane.from"
-        :to="lane.to"
-        :kind="lane.kind"
-        :weight="lane.weight"
-        :stroke-scale="laneStrokeScale"
-      />
-
-      <!-- Orbit rings at system zoom level -->
-      <template v-if="zoomLevel === 'system' || zoomLevel === 'planet'">
-        <circle
-          v-for="body in visibleBodies.filter((b) => b.kind === 'planet')"
-          :key="`orbit-${body.id}`"
-          :cx="bodyMap.get(body.parentId ?? '')?.position.x ?? 0"
-          :cy="bodyMap.get(body.parentId ?? '')?.position.y ?? 0"
-          :r="'orbitRadius' in body ? (body as any).orbitRadius : 0"
+        <!-- Galaxy arm trail — smooth bezier through all systems -->
+        <path
+          v-if="trailPath"
+          :d="trailPath"
           fill="none"
-          stroke="rgba(255,255,255,0.05)"
-          stroke-width="0.5"
-          class="orbit-ring"
+          stroke="rgba(180,210,255,0.07)"
+          stroke-width="28"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          class="trail-glow"
         />
-      </template>
-
-      <!-- Moon orbit rings at planet zoom -->
-      <template v-if="zoomLevel === 'planet'">
-        <circle
-          v-for="body in visibleBodies.filter((b) => b.kind === 'moon')"
-          :key="`moon-orbit-${body.id}`"
-          :cx="bodyMap.get(body.parentId ?? '')?.position.x ?? 0"
-          :cy="bodyMap.get(body.parentId ?? '')?.position.y ?? 0"
-          :r="'orbitRadius' in body ? (body as any).orbitRadius : 0"
+        <path
+          v-if="trailPath"
+          :d="trailPath"
           fill="none"
-          stroke="rgba(255,255,255,0.04)"
-          stroke-width="0.3"
-          class="orbit-ring"
+          stroke="rgba(180,210,255,0.18)"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-dasharray="18 14"
+          class="trail-path"
         />
-      </template>
 
-      <!-- Bodies -->
-      <BodyNode
-        v-for="body in visibleBodies"
-        :key="body.id"
-        :body="body"
-        :visual="visuals[body.id]"
-        :label="bodyLabel(body)"
-        :visited="isVisited(body)"
-        :hovered="hoveredBodyId === body.id"
-        :label-scale="labelScale"
-        @click="onBodyClick"
-        @pointerenter="onBodyHover"
-        @pointerleave="onBodyLeave"
-      />
+        <!-- Warp lanes (planet zoom only) -->
+        <WarpLane
+          v-for="(lane, i) in visibleLanes"
+          :key="`lane-${i}`"
+          :from="lane.from"
+          :to="lane.to"
+          :kind="lane.kind"
+          :weight="lane.weight"
+          :stroke-scale="laneStrokeScale"
+        />
+
+        <!-- Orbit rings at system zoom level -->
+        <template v-if="zoomLevel === 'system' || zoomLevel === 'planet'">
+          <circle
+            v-for="body in visibleBodies.filter((b) => b.kind === 'planet')"
+            :key="`orbit-${body.id}`"
+            :cx="bodyMap.get(body.parentId ?? '')?.position.x ?? 0"
+            :cy="bodyMap.get(body.parentId ?? '')?.position.y ?? 0"
+            :r="'orbitRadius' in body ? (body as any).orbitRadius : 0"
+            fill="none"
+            stroke="rgba(255,255,255,0.05)"
+            stroke-width="0.5"
+            class="orbit-ring"
+          />
+        </template>
+
+        <!-- Moon orbit rings at planet zoom -->
+        <template v-if="zoomLevel === 'planet'">
+          <circle
+            v-for="body in visibleBodies.filter((b) => b.kind === 'moon')"
+            :key="`moon-orbit-${body.id}`"
+            :cx="bodyMap.get(body.parentId ?? '')?.position.x ?? 0"
+            :cy="bodyMap.get(body.parentId ?? '')?.position.y ?? 0"
+            :r="'orbitRadius' in body ? (body as any).orbitRadius : 0"
+            fill="none"
+            stroke="rgba(255,255,255,0.04)"
+            stroke-width="0.3"
+            class="orbit-ring"
+          />
+        </template>
+
+        <!-- Bodies -->
+        <BodyNode
+          v-for="body in visibleBodies"
+          :key="body.id"
+          :body="body"
+          :visual="visuals[body.id]"
+          :label="bodyLabel(body)"
+          :visited="isVisited(body)"
+          :hovered="hoveredBodyId === body.id"
+          :label-scale="labelScale"
+          :rotated="isPortrait && zoomLevel === 'galaxy'"
+          @click="onBodyClick"
+          @pointerenter="onBodyHover"
+          @pointerleave="onBodyLeave"
+        />
+
+      </g>
     </svg>
 
     <!-- Tooltip (HTML overlay, always sharp) -->

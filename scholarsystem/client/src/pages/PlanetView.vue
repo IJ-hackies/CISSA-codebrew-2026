@@ -159,7 +159,9 @@ function isConceptVisited(conceptId: string): boolean {
 
 // ─── Navigation ───────────────────────────────────────────────────────
 function goBack() {
-  router.push(`/galaxy/${route.params.id}`)
+  // replace() rather than push() so PlanetView doesn't litter the browser
+  // history stack — the back button then correctly returns to the galaxy map.
+  router.replace(`/galaxy/${route.params.id}`)
 }
 
 function enterConcept(conceptId: string) {

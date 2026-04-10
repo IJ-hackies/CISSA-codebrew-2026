@@ -2,17 +2,34 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useGalaxyStore } from '@/lib/galaxyStore'
-import GalaxyRenderer from '@/components/GalaxyRenderer.vue'
+import SceneBackground from '@/components/scene/SceneBackground.vue'
+import CharacterSprite from '@/components/scene/CharacterSprite.vue'
+import DialogueBox from '@/components/scene/DialogueBox.vue'
+import ChallengePanel from '@/components/scene/ChallengePanel.vue'
+import type { Biome } from '@/components/scene/SceneBackground.vue'
+import type { CharacterId, AnimationId } from '@/components/scene/CharacterSprite.vue'
 import type { Concept } from '@/types/galaxy'
+import {
+  pickArchetype,
+  pickChallengeType,
+  generateChallenge,
+  generateDialogue as mockGenerateDialogue,
+  getOpeningNarrative,
+  type Archetype,
+  type ConceptLike,
+} from '@/lib/mockScene'
 
-const route = useRoute()
+const route  = useRoute()
 const router = useRouter()
 const { galaxy, loadGalaxy } = useGalaxyStore()
 
+// ─── Scene phase ───────────────────────────────────────────────────────
+// narrative = non-dialogue archetypes show opening flavour text before challenge
+type Phase = 'loading' | 'dialogue' | 'narrative' | 'challenge' | 'result'
+const phase = ref<Phase>('loading')
+
+// ─── Data loading ──────────────────────────────────────────────────────
 const loading = ref(false)
-const selectedOptionId = ref<string | null>(null)
-const submitted = ref(false)
-const revealed = ref(false)
 
 onMounted(async () => {
   const id = route.params.id as string
@@ -20,6 +37,13 @@ onMounted(async () => {
   loading.value = true
   await loadGalaxy(id)
   loading.value = false
+  const arc = concept.value ? pickArchetype(toConceptLike(concept.value)) : 'guardian-dialogue'
+  // guardian-dialogue and memory-echo open with full NPC dialogue
+  if (arc === 'guardian-dialogue' || arc === 'memory-echo') {
+    phase.value = 'dialogue'
+  } else {
+    phase.value = 'narrative'
+  }
 })
 
 // ─── Concept data ──────────────────────────────────────────────────────
@@ -29,14 +53,39 @@ const concept = computed<Concept | null>(
   () => galaxy.value?.knowledge?.concepts.find((c) => c.id === conceptId.value) ?? null,
 )
 
-// Find the parent subtopic so we can go back to the right planet
 const parentSubtopic = computed(() => {
   const g = galaxy.value
   if (!g?.knowledge || !conceptId.value) return null
   return g.knowledge.subtopics.find((s) => s.conceptIds.includes(conceptId.value)) ?? null
 })
 
-// ─── Kind styling ──────────────────────────────────────────────────────
+// ─── Neighbours for challenge generation ──────────────────────────────
+function toConceptLike(c: Concept): ConceptLike {
+  return {
+    id:        c.id,
+    title:     c.title,
+    kind:      c.kind,
+    brief:     c.brief,
+    modelTier: (c as any).modelTier ?? 'standard',
+  }
+}
+
+const neighbours = computed<ConceptLike[]>(() => {
+  const g = galaxy.value
+  const c = concept.value
+  if (!g?.knowledge || !c) return []
+  const sub       = parentSubtopic.value
+  const siblingIds = sub?.conceptIds ?? []
+  const siblings   = g.knowledge.concepts.filter(
+    (x) => x.id !== c.id && siblingIds.includes(x.id),
+  )
+  const others = g.knowledge.concepts.filter(
+    (x) => x.id !== c.id && !siblingIds.includes(x.id),
+  )
+  return [...siblings, ...others].slice(0, 8).map(toConceptLike)
+})
+
+// ─── Kind config ───────────────────────────────────────────────────────
 const KIND_COLORS: Record<string, string> = {
   definition: '#4a9eff',
   formula:    '#c084fc',
@@ -46,92 +95,143 @@ const KIND_COLORS: Record<string, string> = {
   process:    '#22d3ee',
 }
 
-const KIND_OPENERS: Record<string, string> = {
-  definition: 'You are about to learn a key definition.',
-  formula:    'A fundamental formula awaits.',
-  example:    'Let\'s explore this through an example.',
-  fact:       'There is a fact of the universe to uncover.',
-  principle:  'A guiding principle governs this domain.',
-  process:    'A process unfolds before you.',
-}
-
 const accentColor = computed(() =>
   concept.value ? (KIND_COLORS[concept.value.kind] ?? '#7a9abb') : '#7a9abb',
 )
 
-// ─── Seeded shuffle for deterministic options ──────────────────────────
-function hash(str: string): number {
-  let h = 0x811c9dc5
-  for (const c of str) h = Math.imul(h ^ c.charCodeAt(0), 0x01000193)
-  return h >>> 0
-}
-function makeRng(seed: number) {
-  let s = seed >>> 0
-  return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 0xffffffff }
-}
-function seededShuffle<T>(arr: T[], seed: number): T[] {
-  const rng = makeRng(seed)
-  const a = [...arr]
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]]
-  }
-  return a
+// ─── Biome resolution ──────────────────────────────────────────────────
+const KIND_BIOMES: Record<string, Biome> = {
+  definition: 'alien-ruins',
+  formula:    'space-station',
+  example:    'jungle-canopy',
+  fact:       'crystal-cave',
+  principle:  'floating-islands',
+  process:    'volcanic-surface',
 }
 
-// ─── Challenge options ─────────────────────────────────────────────────
-interface Option { id: string; text: string; isCorrect: boolean }
-
-const challengeOptions = computed<Option[]>(() => {
+const biome = computed<Biome>(() => {
   const g = galaxy.value
   const c = concept.value
-  if (!g?.knowledge || !c) return []
-
-  // Pick 3 distractors from other concepts in the same subtopic's topic,
-  // falling back to any concept if needed. Seeded for consistency.
-  const others = g.knowledge.concepts.filter((x) => x.id !== c.id)
-  const seed = hash(c.id)
-  const distractors = seededShuffle(others, seed).slice(0, 3)
-
-  const raw: Option[] = [
-    { id: '__correct__', text: c.brief, isCorrect: true },
-    ...distractors.map((d) => ({ id: d.id, text: d.brief, isCorrect: false })),
-  ]
-
-  return seededShuffle(raw, seed ^ 0xabcdef)
+  if (!g || !c) return 'crystal-cave'
+  const body = g.spatial?.bodies.find(
+    (b) => 'knowledgeRef' in b && b.knowledgeRef === c.id,
+  )
+  const visual = body ? (g.visuals?.[body.id] as any) : null
+  if (visual?.biome) return visual.biome as Biome
+  return KIND_BIOMES[c.kind] ?? 'crystal-cave'
 })
 
-const isCorrect = computed(() =>
-  challengeOptions.value.find((o) => o.id === selectedOptionId.value)?.isCorrect ?? false,
+// ─── Character resolution ──────────────────────────────────────────────
+const KIND_CHARACTERS: Record<string, CharacterId> = {
+  definition: 'sage',
+  formula:    'engineer',
+  example:    'archivist',
+  fact:       'trickster',
+  principle:  'sage',
+  process:    'engineer',
+}
+
+const CHARACTER_NAMES: Record<CharacterId, string> = {
+  scholar:   'Scholar',
+  sage:      'The Sage',
+  engineer:  'The Engineer',
+  warrior:   'The Warrior',
+  archivist: 'The Archivist',
+  trickster: 'The Trickster',
+  echo:      'The Echo',
+}
+
+const character = computed<CharacterId>(() => {
+  const g = galaxy.value
+  const c = concept.value
+  if (!g || !c) return 'sage'
+  // memory-echo always uses the ghost character
+  if (archetype.value === 'memory-echo') return 'echo'
+  const body = g.spatial?.bodies.find(
+    (b) => 'knowledgeRef' in b && b.knowledgeRef === c.id,
+  )
+  const visual = body ? (g.visuals?.[body.id] as any) : null
+  if (visual?.character) return visual.character as CharacterId
+  return KIND_CHARACTERS[c.kind] ?? 'sage'
+})
+
+const speakerName = computed(() => CHARACTER_NAMES[character.value])
+
+// ─── Archetype & challenge ─────────────────────────────────────────────
+const archetype = computed<Archetype>(() =>
+  concept.value ? pickArchetype(toConceptLike(concept.value)) : 'guardian-dialogue',
 )
 
-// ─── Progress update (in-memory) ───────────────────────────────────────
-function markVisited() {
+const challenge = computed(() => {
+  const c = concept.value
+  if (!c) return null
+  const cl   = toConceptLike(c)
+  const type = pickChallengeType(cl, archetype.value)
+  return generateChallenge(cl, neighbours.value, type)
+})
+
+const openingNarrative = computed(() =>
+  concept.value ? getOpeningNarrative(toConceptLike(concept.value), archetype.value) : '',
+)
+
+// ─── Archetype label ──────────────────────────────────────────────────
+const ARCHETYPE_LABELS: Record<Archetype, string> = {
+  'guardian-dialogue':     'Guardian Dialogue',
+  'exploration-discovery': 'Exploration',
+  'environmental-puzzle':  'Environmental Puzzle',
+  'memory-echo':           'Memory Echo',
+  'cooperative-challenge': 'Cooperative Challenge',
+}
+
+// ─── Character animation ────────────────────────────────────────────────
+const characterAnimation = ref<AnimationId>('warp-in')
+
+function onAnimationComplete(anim: AnimationId) {
+  if (anim === 'celebrate' || anim === 'hit-reaction') {
+    characterAnimation.value = 'idle'
+  }
+}
+
+function onEmotionChange(anim: AnimationId) {
+  if (phase.value === 'dialogue' || phase.value === 'challenge') {
+    characterAnimation.value = anim
+  }
+}
+
+// ─── Dialogue lines ─────────────────────────────────────────────────────
+const dialogueLines = computed(() => {
+  const c = concept.value
+  if (!c) return []
+  return mockGenerateDialogue(toConceptLike(c))
+})
+
+// ─── Challenge result ───────────────────────────────────────────────────
+const challengeResult = ref(false)
+
+// ─── Progress ──────────────────────────────────────────────────────────
+function markVisited(correct: boolean) {
   const g = galaxy.value
   const c = concept.value
   if (!g?.spatial || !c) return
-
   const body = g.spatial.bodies.find(
     (b) => 'knowledgeRef' in b && b.knowledgeRef === c.id,
   )
   if (!body) return
-
   const existing = g.progress.bodies[body.id]
-  const score = isCorrect.value ? 1 : 0
+  const score    = correct ? 1 : 0
   g.progress.bodies[body.id] = {
-    visited: true,
-    attemptCount: (existing?.attemptCount ?? 0) + 1,
-    bestScore: Math.max(existing?.bestScore ?? 0, score),
-    lastScore: score,
-    hintsUsed: existing?.hintsUsed ?? 0,
-    timeSpentMs: existing?.timeSpentMs ?? 0,
+    visited:         true,
+    attemptCount:    (existing?.attemptCount ?? 0) + 1,
+    bestScore:       Math.max(existing?.bestScore ?? 0, score),
+    lastScore:       score,
+    hintsUsed:       existing?.hintsUsed ?? 0,
+    timeSpentMs:     existing?.timeSpentMs ?? 0,
     masteryEstimate: score,
     attempts: [
       ...(existing?.attempts ?? []),
-      { at: Date.now(), score, chosenOptionId: selectedOptionId.value ?? '' },
+      { at: Date.now(), score, chosenOptionId: '' },
     ],
   }
-
   if (!existing?.visited) g.progress.visitedCount++
   if (score === 1) g.progress.completedCount++
   g.progress.overallMastery =
@@ -141,172 +241,163 @@ function markVisited() {
 }
 
 // ─── Interactions ──────────────────────────────────────────────────────
-function selectOption(id: string) {
-  if (submitted.value) return
-  selectedOptionId.value = id
+function onDialogueComplete() {
+  characterAnimation.value = 'idle'
+  phase.value = 'challenge'
 }
 
-function submit() {
-  if (!selectedOptionId.value || submitted.value) return
-  submitted.value = true
-  markVisited()
+function onNarrativeAdvance() {
+  characterAnimation.value = 'idle'
+  phase.value = 'challenge'
+}
+
+function onChallengeComplete(correct: boolean) {
+  challengeResult.value = correct
+  markVisited(correct)
+  characterAnimation.value = correct ? 'celebrate' : 'hit-reaction'
+  phase.value = 'result'
 }
 
 function goBack() {
   const sub = parentSubtopic.value
-  if (sub) {
-    router.push(`/galaxy/${route.params.id}/planet/${sub.id}`)
-  } else {
-    router.push(`/galaxy/${route.params.id}`)
-  }
+  // replace() so ConceptScene doesn't push an extra history entry —
+  // the browser back button then correctly returns to the planet/galaxy view.
+  router.replace(sub
+    ? `/galaxy/${route.params.id}/planet/${sub.id}`
+    : `/galaxy/${route.params.id}`,
+  )
 }
 </script>
 
 <template>
   <div class="scene-page">
-    <GalaxyRenderer class="bg" />
 
-    <!-- ─── HUD ────────────────────────────────────────────────────────── -->
-    <header class="hud">
-      <button class="back-btn" @click="goBack">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      </button>
-      <span class="hud-chapter">{{ concept?.chapter }}</span>
-      <span
-        class="hud-kind"
-        :style="{ color: accentColor, borderColor: `${accentColor}44`, background: `${accentColor}11` }"
-      >{{ concept?.kind }}</span>
-    </header>
+    <!-- ─── Background ─────────────────────────────────────────────────── -->
+    <SceneBackground :biome="biome" />
 
-    <!-- ─── Loading ──────────────────────────────────────────────────── -->
-    <div v-if="loading" class="center-screen">
-      <p class="loading-label">Loading…</p>
-    </div>
+    <!-- ─── Loading ───────────────────────────────────────────────────── -->
+    <Transition name="fade">
+      <div v-if="loading" class="state-overlay">
+        <span class="state-text">Entering the scene…</span>
+      </div>
+    </Transition>
 
-    <!-- ─── Scene content ────────────────────────────────────────────── -->
-    <main v-else-if="concept" class="scene-scroll">
-      <div class="scene-container">
+    <!-- ─── Main scene ─────────────────────────────────────────────────── -->
+    <template v-if="concept && !loading">
 
-        <!-- Opening narrative -->
-        <div class="opening">
-          <div class="opening-line" :style="{ background: `${accentColor}22`, borderColor: `${accentColor}44` }">
-            <span class="opening-icon" :style="{ color: accentColor }">◈</span>
-            <span class="opening-text">{{ KIND_OPENERS[concept.kind] ?? 'Something awaits.' }}</span>
-          </div>
+      <!-- HUD back button -->
+      <header class="hud">
+        <button class="back-btn" @click="goBack" aria-label="Go back">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.8"
+              stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+        <span class="hud-chapter">{{ concept.chapter }}</span>
+        <span
+          class="hud-kind"
+          :style="{ color: accentColor, borderColor: `${accentColor}44`, background: `${accentColor}11` }"
+        >{{ concept.kind }}</span>
+      </header>
+
+      <!-- Character stage — always visible once scene starts -->
+      <Transition name="character-enter">
+        <div v-if="phase !== 'loading'" class="character-stage">
+          <CharacterSprite
+            :character="character"
+            :animation="characterAnimation"
+            :size="220"
+            :alpha="character === 'echo' ? 0.6 : 1"
+            @animation-complete="onAnimationComplete"
+          />
         </div>
+      </Transition>
 
-        <!-- ─── Concept card ─────────────────────────────────────────── -->
-        <div class="concept-card" :style="{ '--accent': accentColor }">
-          <div class="card-glow" :style="{ background: `radial-gradient(ellipse at 30% 20%, ${accentColor}18, transparent 65%)` }" />
+      <!-- ── Phase: dialogue (guardian-dialogue, memory-echo) ─────── -->
+      <Transition name="slide-up">
+        <DialogueBox
+          v-if="phase === 'dialogue'"
+          :lines="dialogueLines"
+          :speaker-name="speakerName"
+          @emotion="onEmotionChange"
+          @complete="onDialogueComplete"
+        />
+      </Transition>
 
-          <div class="card-header">
+      <!-- ── Phase: narrative (exploration, puzzle, cooperative) ─── -->
+      <Transition name="slide-up">
+        <div
+          v-if="phase === 'narrative'"
+          class="narrative-card"
+          role="button"
+          tabindex="0"
+          @click="onNarrativeAdvance"
+          @keydown.enter="onNarrativeAdvance"
+          @keydown.space.prevent="onNarrativeAdvance"
+        >
+          <div class="narrative-inner">
             <span
-              class="kind-badge"
-              :style="{ color: accentColor, borderColor: `${accentColor}44`, background: `${accentColor}12` }"
-            >{{ concept.kind }}</span>
-            <span class="chapter-tag">{{ concept.chapter }}</span>
+              class="narrative-archetype-tag"
+              :style="{ color: accentColor, borderColor: `${accentColor}33`, background: `${accentColor}0d` }"
+            >{{ ARCHETYPE_LABELS[archetype] }}</span>
+            <p class="narrative-title">{{ concept.title }}</p>
+            <p class="narrative-text">{{ openingNarrative }}</p>
+            <span class="narrative-hint">Tap to begin ▶</span>
           </div>
-
-          <h1 class="concept-title">{{ concept.title }}</h1>
-          <p class="concept-brief">{{ concept.brief }}</p>
         </div>
+      </Transition>
 
-        <!-- ─── Challenge ────────────────────────────────────────────── -->
-        <div class="challenge-section">
-          <div class="challenge-header">
-            <div class="challenge-rule" />
-            <span class="challenge-label">Test your understanding</span>
-            <div class="challenge-rule" />
-          </div>
+      <!-- ── Phase: challenge ──────────────────────────────────────── -->
+      <Transition name="slide-up">
+        <ChallengePanel
+          v-if="phase === 'challenge' && challenge"
+          :challenge="challenge"
+          :accent-color="accentColor"
+          @complete="onChallengeComplete"
+          @emotion="onEmotionChange"
+        />
+      </Transition>
 
-          <p class="challenge-question">
-            Which of the following best describes
-            <strong>{{ concept.title }}</strong>?
-          </p>
+      <!-- ── Phase: result ─────────────────────────────────────────── -->
+      <Transition name="slide-up">
+        <div v-if="phase === 'result'" class="result-panel">
+          <div class="result-inner">
 
-          <div class="options-list">
-            <button
-              v-for="option in challengeOptions"
-              :key="option.id"
-              class="option-btn"
-              :class="{
-                selected: selectedOptionId === option.id && !submitted,
-                correct: submitted && option.isCorrect,
-                wrong: submitted && selectedOptionId === option.id && !option.isCorrect,
-                dimmed: submitted && !option.isCorrect && selectedOptionId !== option.id,
-              }"
-              :disabled="submitted"
-              @click="selectOption(option.id)"
-            >
-              <span class="option-indicator">
-                <span v-if="!submitted" class="option-dot" :class="{ filled: selectedOptionId === option.id }" />
-                <span v-else-if="option.isCorrect" class="option-check">✓</span>
-                <span v-else-if="selectedOptionId === option.id" class="option-x">✗</span>
-                <span v-else class="option-dot" />
-              </span>
-              <span class="option-text">{{ option.text }}</span>
-            </button>
-          </div>
-
-          <!-- Submit -->
-          <Transition name="fade-up">
-            <button
-              v-if="selectedOptionId && !submitted"
-              class="submit-btn"
-              :style="{ background: accentColor }"
-              @click="submit"
-            >
-              Submit answer
-            </button>
-          </Transition>
-
-          <!-- Result -->
-          <Transition name="fade-up">
-            <div v-if="submitted" class="result-banner" :class="isCorrect ? 'result-correct' : 'result-wrong'">
-              <div class="result-icon">{{ isCorrect ? '✦' : '◇' }}</div>
+            <div class="result-banner" :class="challengeResult ? 'result-correct' : 'result-wrong'">
+              <div class="result-icon">{{ challengeResult ? '✦' : '◇' }}</div>
               <div class="result-body">
-                <p class="result-heading">{{ isCorrect ? 'Correct!' : 'Not quite.' }}</p>
+                <p class="result-heading">{{ challengeResult ? 'Correct!' : 'Not quite.' }}</p>
                 <p class="result-sub">
-                  {{ isCorrect
-                    ? 'Great work. This concept is now marked as visited.'
-                    : 'The correct answer was highlighted above. Review it and try again next time.' }}
+                  {{ challengeResult
+                    ? 'Excellent. This concept is now marked as visited.'
+                    : 'The correct answer was shown. Review it before moving on.' }}
                 </p>
               </div>
             </div>
-          </Transition>
 
-          <!-- Continue -->
-          <Transition name="fade-up">
-            <button v-if="submitted" class="continue-btn" @click="goBack">
+            <button class="continue-btn" @click="goBack">
               Continue exploring
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M3 7h8M8 4l3 3-3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M3 7h8M8 4l3 3-3 3" stroke="currentColor"
+                  stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
             </button>
-          </Transition>
-        </div>
 
-        <div class="bottom-spacer" />
-      </div>
-    </main>
+          </div>
+        </div>
+      </Transition>
+
+    </template>
   </div>
 </template>
 
 <style scoped>
 .scene-page {
   position: relative;
-  min-height: 100dvh;
   width: 100%;
+  height: 100dvh;
+  overflow: hidden;
   background: var(--color-void-base);
-}
-.bg {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  opacity: 0.4;
 }
 
 /* ─── HUD ─────────────────────────────────────────────────────────── */
@@ -318,10 +409,11 @@ function goBack() {
   align-items: center;
   gap: 12px;
   padding: 12px 20px;
-  background: linear-gradient(to bottom, rgba(2,4,10,0.9) 0%, rgba(2,4,10,0.65) 70%, transparent 100%);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--color-hairline);
+  background: linear-gradient(to bottom,
+    rgba(2,4,10,0.88) 0%,
+    rgba(2,4,10,0.5) 70%,
+    transparent 100%
+  );
 }
 
 .back-btn {
@@ -342,9 +434,6 @@ function goBack() {
   letter-spacing: 0.12em;
   color: var(--color-text-muted);
   flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .hud-kind {
   font-family: var(--font-ui);
@@ -355,88 +444,48 @@ function goBack() {
   padding: 3px 10px;
   border-radius: 999px;
   border: 1px solid;
-  flex-shrink: 0;
 }
 
-/* ─── Loading ─────────────────────────────────────────────────────── */
-.center-screen {
-  position: fixed; inset: 0; z-index: 10;
-  display: flex; align-items: center; justify-content: center;
+/* ─── Character stage ─────────────────────────────────────────────── */
+.character-stage {
+  position: fixed;
+  bottom: 168px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  pointer-events: none;
 }
-.loading-label {
-  font-family: var(--font-ui);
-  font-size: 0.72rem;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
+@media (max-width: 640px) {
+  .character-stage { bottom: 148px; }
 }
 
-/* ─── Scene scroll ───────────────────────────────────────────────── */
-.scene-scroll {
-  position: relative;
-  z-index: 5;
-  height: 100dvh;
-  overflow-y: auto;
-  padding-top: 72px;
+/* ─── Narrative card ──────────────────────────────────────────────── */
+.narrative-card {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 40;
+  background: rgba(4, 6, 14, 0.94);
+  border-top: 1px solid rgba(232, 236, 242, 0.1);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  clip-path: polygon(0 8px, 8px 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
+  cursor: pointer;
 }
-.scene-container {
+.narrative-card:hover { background: rgba(6, 8, 18, 0.96); }
+
+.narrative-inner {
   max-width: 620px;
   margin: 0 auto;
-  padding: 32px 20px 0;
+  padding: 26px 28px 36px;
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 12px;
 }
 
-/* ─── Opening ─────────────────────────────────────────────────────── */
-.opening {
-  display: flex;
-  justify-content: center;
-}
-.opening-line {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 18px;
-  border-radius: 999px;
-  border: 1px solid;
-  font-family: var(--font-body);
-  font-size: 0.82rem;
-  font-style: italic;
-  color: var(--color-text-muted);
-}
-.opening-icon {
-  font-style: normal;
-  font-size: 1rem;
-}
-.opening-text { line-height: 1.4; }
-
-/* ─── Concept card ───────────────────────────────────────────────── */
-.concept-card {
-  position: relative;
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 22px;
-  padding: 28px 28px 24px;
-  background: rgba(8,14,26,0.78);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  overflow: hidden;
-}
-.card-glow {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-}
-.card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-.kind-badge {
+.narrative-archetype-tag {
+  align-self: flex-start;
   font-family: var(--font-ui);
-  font-size: 0.6rem;
+  font-size: 0.58rem;
   font-weight: 700;
   letter-spacing: 0.2em;
   text-transform: uppercase;
@@ -444,178 +493,74 @@ function goBack() {
   border-radius: 999px;
   border: 1px solid;
 }
-.chapter-tag {
-  font-family: var(--font-ui);
-  font-size: 0.62rem;
-  letter-spacing: 0.1em;
-  color: var(--color-text-muted);
-  opacity: 0.6;
-}
-.concept-title {
-  font-family: var(--font-ui);
-  font-size: 1.55rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  line-height: 1.2;
-  color: var(--color-text-primary);
-  margin: 0 0 14px;
-}
-.concept-brief {
-  font-family: var(--font-body);
-  font-size: 0.92rem;
-  line-height: 1.65;
-  color: var(--color-text-muted);
-  margin: 0;
-}
 
-/* ─── Challenge ──────────────────────────────────────────────────── */
-.challenge-section {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-.challenge-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.challenge-rule {
-  flex: 1;
-  height: 1px;
-  background: var(--color-hairline-strong);
-}
-.challenge-label {
+.narrative-title {
   font-family: var(--font-ui);
-  font-size: 0.62rem;
+  font-size: 1.05rem;
   font-weight: 700;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
-  white-space: nowrap;
-}
-.challenge-question {
-  font-family: var(--font-body);
-  font-size: 0.92rem;
-  line-height: 1.5;
   color: var(--color-text-primary);
   margin: 0;
+  letter-spacing: 0.03em;
 }
-.challenge-question strong { font-weight: 600; color: #fff; }
 
-/* ─── Options ────────────────────────────────────────────────────── */
-.options-list {
+.narrative-text {
+  font-family: var(--font-body);
+  font-size: 0.88rem;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  margin: 0;
+  font-style: italic;
+}
+
+.narrative-hint {
+  font-family: var(--font-ui);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  color: rgba(232,236,242,0.3);
+  margin-top: 4px;
+}
+
+/* ─── Result panel ────────────────────────────────────────────────── */
+.result-panel {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 40;
+  max-height: 72dvh;
+  overflow-y: auto;
+  background: rgba(4, 6, 14, 0.94);
+  border-top: 1px solid rgba(232, 236, 242, 0.1);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  clip-path: polygon(0 8px, 8px 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
+}
+
+.result-inner {
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 28px 28px 40px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 20px;
 }
-.option-btn {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  text-align: left;
-  padding: 14px 16px;
-  border-radius: 14px;
-  border: 1px solid var(--color-hairline-strong);
-  background: rgba(232,236,242,0.03);
-  color: var(--color-text-muted);
-  font-family: var(--font-body);
-  font-size: 0.84rem;
-  line-height: 1.5;
-  cursor: pointer;
-  transition: border-color 180ms ease, background 180ms ease, color 180ms ease;
-}
-.option-btn:hover:not(:disabled) {
-  border-color: rgba(232,236,242,0.22);
-  background: rgba(232,236,242,0.06);
-  color: var(--color-text-primary);
-}
-.option-btn.selected {
-  border-color: rgba(232,236,242,0.35);
-  background: rgba(232,236,242,0.08);
-  color: var(--color-text-primary);
-}
-.option-btn.correct {
-  border-color: rgba(52,211,153,0.5);
-  background: rgba(52,211,153,0.08);
-  color: #6ee7b7;
-}
-.option-btn.wrong {
-  border-color: rgba(248,113,113,0.5);
-  background: rgba(248,113,113,0.08);
-  color: #fca5a5;
-}
-.option-btn.dimmed { opacity: 0.4; }
-.option-btn:disabled { cursor: default; }
 
-.option-indicator {
-  flex-shrink: 0;
-  margin-top: 2px;
-  width: 18px;
-  height: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.option-dot {
-  width: 14px; height: 14px;
-  border-radius: 50%;
-  border: 1.5px solid currentColor;
-  opacity: 0.5;
-  display: block;
-}
-.option-dot.filled {
-  border-color: var(--color-text-primary);
-  background: var(--color-text-primary);
-  opacity: 1;
-}
-.option-check { color: #34d399; font-size: 1rem; line-height: 1; }
-.option-x     { color: #f87171; font-size: 1rem; line-height: 1; }
-.option-text  { flex: 1; }
-
-/* ─── Submit ─────────────────────────────────────────────────────── */
-.submit-btn {
-  align-self: center;
-  padding: 12px 36px;
-  border-radius: 999px;
-  border: none;
-  color: #02040a;
-  font-family: var(--font-ui);
-  font-size: 0.82rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  cursor: pointer;
-  transition: filter 200ms ease, transform 160ms ease;
-}
-.submit-btn:hover { filter: brightness(1.1); transform: translateY(-1px); }
-
-/* ─── Result banner ──────────────────────────────────────────────── */
 .result-banner {
   display: flex;
   align-items: flex-start;
   gap: 14px;
-  padding: 16px 20px;
-  border-radius: 16px;
+  padding: 18px 20px;
+  border-radius: 14px;
   border: 1px solid;
 }
-.result-correct {
-  border-color: rgba(52,211,153,0.4);
-  background: rgba(52,211,153,0.07);
-}
-.result-wrong {
-  border-color: rgba(248,113,113,0.35);
-  background: rgba(248,113,113,0.07);
-}
-.result-icon {
-  font-size: 1.4rem;
-  line-height: 1;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
+.result-correct { border-color: rgba(52,211,153,0.4);   background: rgba(52,211,153,0.07); }
+.result-wrong   { border-color: rgba(248,113,113,0.35); background: rgba(248,113,113,0.07); }
+
+.result-icon { font-size: 1.4rem; flex-shrink: 0; margin-top: 1px; }
 .result-correct .result-icon { color: #34d399; }
-.result-wrong  .result-icon { color: #f87171; }
+.result-wrong   .result-icon { color: #f87171; }
+
 .result-heading {
   font-family: var(--font-ui);
-  font-size: 0.88rem;
+  font-size: 0.9rem;
   font-weight: 700;
   color: var(--color-text-primary);
   margin: 0 0 5px;
@@ -628,7 +573,7 @@ function goBack() {
   margin: 0;
 }
 
-/* ─── Continue ───────────────────────────────────────────────────── */
+/* ─── Continue button ─────────────────────────────────────────────── */
 .continue-btn {
   align-self: center;
   display: flex;
@@ -644,7 +589,7 @@ function goBack() {
   font-weight: 600;
   letter-spacing: 0.06em;
   cursor: pointer;
-  transition: background 200ms ease, border-color 200ms ease, transform 160ms ease;
+  transition: background 200ms ease, border-color 200ms ease, transform 150ms ease;
 }
 .continue-btn:hover {
   background: rgba(232,236,242,0.1);
@@ -652,16 +597,37 @@ function goBack() {
   transform: translateY(-1px);
 }
 
-/* ─── Transitions ────────────────────────────────────────────────── */
-.fade-up-enter-active,
-.fade-up-leave-active {
-  transition: opacity 320ms ease, transform 320ms ease;
+/* ─── State overlay ───────────────────────────────────────────────── */
+.state-overlay {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--color-void-base);
 }
-.fade-up-enter-from,
-.fade-up-leave-to {
-  opacity: 0;
-  transform: translateY(10px);
+.state-text {
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
 }
 
-.bottom-spacer { height: 80px; }
+/* ─── Transitions ─────────────────────────────────────────────────── */
+.slide-up-enter-active { transition: transform 380ms cubic-bezier(0.22, 1, 0.36, 1), opacity 280ms ease; }
+.slide-up-leave-active { transition: transform 240ms ease, opacity 200ms ease; }
+.slide-up-enter-from   { transform: translateY(100%); opacity: 0; }
+.slide-up-leave-to     { transform: translateY(100%); opacity: 0; }
+
+.character-enter-enter-active { transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1), opacity 400ms ease; }
+.character-enter-enter-from   { transform: translateX(-50%) translateY(40px); opacity: 0; }
+
+.fade-up-enter-active { transition: opacity 280ms ease, transform 280ms ease; }
+.fade-up-enter-from   { opacity: 0; transform: translateY(8px); }
+
+.fade-enter-active { transition: opacity 200ms ease; }
+.fade-leave-active { transition: opacity 300ms ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+@media (max-width: 640px) {
+  .narrative-inner, .result-inner { padding-left: 18px; padding-right: 18px; }
+}
 </style>

@@ -9,8 +9,10 @@
 import { ref } from 'vue'
 import type { Galaxy } from '@/types/galaxy'
 import { getGalaxy } from './api'
+import type { CameraState } from '@/composables/useMapControls'
 
 const current = ref<Galaxy | null>(null)
+const savedCamera = ref<CameraState | null>(null)
 
 export function useGalaxyStore() {
   function setGalaxy(galaxy: Galaxy) {
@@ -19,6 +21,7 @@ export function useGalaxyStore() {
 
   function clearGalaxy() {
     current.value = null
+    savedCamera.value = null
   }
 
   async function loadGalaxy(id: string): Promise<Galaxy> {
@@ -28,10 +31,20 @@ export function useGalaxyStore() {
     return blob
   }
 
+  function saveCameraState(state: CameraState) {
+    savedCamera.value = state
+  }
+
+  function restoreCameraState(): CameraState | null {
+    return savedCamera.value
+  }
+
   return {
     galaxy: current,
     setGalaxy,
     clearGalaxy,
     loadGalaxy,
+    saveCameraState,
+    restoreCameraState,
   }
 }
