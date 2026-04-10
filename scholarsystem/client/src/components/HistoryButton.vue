@@ -128,8 +128,8 @@ function triggerDebut() {
   border-radius: 14px;
   /* Persistent subtle glow so it reads as a real button, not invisible chrome. */
   box-shadow:
-    0 0 0 1px rgba(255, 181, 71, 0.18),
-    0 0 32px -6px rgba(255, 181, 71, 0.3);
+    0 0 0 1px rgba(255, 181, 71, 0.1),
+    0 0 24px -8px rgba(255, 181, 71, 0.15);
 }
 .history-btn.desktop .label {
   font-family: var(--font-ui);

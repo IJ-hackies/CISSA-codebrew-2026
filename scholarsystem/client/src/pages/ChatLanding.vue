@@ -3,7 +3,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import GalaxyRenderer from '@/components/GalaxyRenderer.vue'
 import ChatInput from '@/components/ChatInput.vue'
-import SuggestionChips from '@/components/SuggestionChips.vue'
 import DropOverlay from '@/components/DropOverlay.vue'
 import HistoryButton from '@/components/HistoryButton.vue'
 import HistoryOverlay from '@/components/HistoryOverlay.vue'
@@ -11,7 +10,6 @@ import { useIsMobile } from '@/composables/useIsMobile'
 import { useVisualViewport } from '@/composables/useVisualViewport'
 import {
   addRecentGalaxy,
-  hasAnyRecentGalaxies,
   listRecentGalaxies,
   type GalaxyEntry,
 } from '@/lib/recentGalaxies'
@@ -28,7 +26,6 @@ const files = ref<File[]>([])
 const launching = ref(false)
 const launchError = ref<string | null>(null)
 const dropVisible = ref(false)
-const showSuggestions = ref(!hasAnyRecentGalaxies())
 const recents = ref<GalaxyEntry[]>(listRecentGalaxies())
 const historyOpen = ref(false)
 
@@ -134,11 +131,6 @@ onBeforeUnmount(() => {
   inputResizeObserver?.disconnect()
   inputResizeObserver = null
 })
-
-function onPickSuggestion(t: string) {
-  text.value = t
-  chatInputRef.value?.focus()
-}
 
 function openHistory() {
   if (!recents.value.length) return
@@ -261,6 +253,23 @@ async function handleSubmit(origin: { x: number; y: number }) {
   <main class="page" :class="{ mobile: isMobile }">
     <GalaxyRenderer ref="galaxyRendererRef" />
 
+    <!-- Nebula blobs -->
+    <div class="nebula nebula-1" />
+    <div class="nebula nebula-2" />
+    <div class="nebula nebula-3" />
+
+    <!-- Dot grid -->
+    <div class="dot-grid" />
+
+    <!-- Hero glow — warm bloom centred behind the content -->
+    <div class="hero-glow" />
+
+    <!-- Noise texture -->
+    <div class="noise" />
+
+    <!-- Edge vignette -->
+    <div class="vignette" />
+
     <!-- Logo + wordmark (top-left desktop, top-right mobile) -->
     <a href="/" class="logo-link" aria-label="Scholar System">
       <img src="/logo.png" alt="Scholar System" class="logo" />
@@ -281,8 +290,9 @@ async function handleSubmit(origin: { x: number; y: number }) {
     >
       <div class="hero">
         <h1 class="tagline">
-          Turn anything you study<br />into a <strong>galaxy</strong> you can explore.
+          Upload your memories.<br />Every one gets <strong>wrapped</strong>.<br />Explore it as a <strong>galaxy</strong>.
         </h1>
+        <p class="sub-tagline">Journals, notes, PDFs, photos — drop anything.</p>
       </div>
 
       <ChatInput
@@ -294,34 +304,29 @@ async function handleSubmit(origin: { x: number; y: number }) {
       />
 
       <div class="hints">
-        <span><kbd>↵</kbd> launch</span>
+        <span><kbd>↵</kbd> create galaxy</span>
         <span class="dot-sep">·</span>
         <span><kbd>⇧↵</kbd> newline</span>
         <span class="dot-sep">·</span>
         <span>drop files anywhere</span>
       </div>
-
-      <SuggestionChips
-        v-if="showSuggestions && !recents.length && !launching"
-        @pick="onPickSuggestion"
-      />
     </div>
 
-    <!-- Subtle desktop footer — file format vocabulary -->
+    <!-- Format indicator -->
     <div v-if="!isMobile" class="formats-footer" :class="{ hidden: launching || historyOpen }">
-      <span class="formats-label">SUPPORTED</span>
-      <span class="formats-list">PDF · DOCX · PPTX · MD · TXT · RTF · HTML · CSV · JSON · EPUB · TEX · IPYNB</span>
+      <div class="format-icons">
+        <span class="fmt-chip">PDF</span>
+        <span class="fmt-chip">DOCX</span>
+        <span class="fmt-chip">TXT</span>
+        <span class="fmt-chip">MD</span>
+        <span class="fmt-chip">Images</span>
+        <span class="fmt-chip">PPTX</span>
+        <span class="fmt-chip">+ more</span>
+      </div>
     </div>
 
     <!-- ─── Mobile layout: chips floating above, input pinned bottom ── -->
     <template v-if="isMobile">
-      <div
-        v-if="showSuggestions && !recents.length && !launching && !historyOpen"
-        class="mobile-chips-floating"
-      >
-        <SuggestionChips @pick="onPickSuggestion" />
-      </div>
-
       <div class="mobile-input-dock" :class="{ launching, dimmed: historyOpen }">
         <ChatInput
           ref="chatInputRef"
@@ -351,6 +356,82 @@ async function handleSubmit(origin: { x: number; y: number }) {
   min-height: 100dvh;
   width: 100%;
   overflow: hidden;
+}
+
+/* Nebula blobs */
+.nebula {
+  position: fixed;
+  border-radius: 50%;
+  filter: blur(110px);
+  pointer-events: none;
+  z-index: 1;
+}
+.nebula-1 {
+  width: 600px; height: 600px;
+  top: -140px; left: -120px;
+  background: radial-gradient(circle, rgba(80, 120, 255, 0.18) 0%, transparent 65%);
+  animation: nebula-1 32s ease-in-out infinite alternate;
+}
+.nebula-2 {
+  width: 520px; height: 520px;
+  bottom: -100px; right: -100px;
+  background: radial-gradient(circle, rgba(130, 80, 255, 0.15) 0%, transparent 65%);
+  animation: nebula-2 28s ease-in-out infinite alternate;
+}
+.nebula-3 {
+  width: 440px; height: 440px;
+  top: 40%; left: 55%;
+  background: radial-gradient(circle, rgba(30, 160, 180, 0.12) 0%, transparent 65%);
+  animation: nebula-3 38s ease-in-out infinite alternate;
+}
+@keyframes nebula-1 {
+  0%   { transform: translate(0, 0)     scale(1);    opacity: 1; }
+  40%  { transform: translate(30px, 40px) scale(1.15); opacity: 0.75; }
+  100% { transform: translate(60px, 80px) scale(0.92); opacity: 0.9; }
+}
+@keyframes nebula-2 {
+  0%   { transform: translate(0, 0)       scale(1.05); opacity: 0.8; }
+  50%  { transform: translate(-25px, -30px) scale(0.88); opacity: 1; }
+  100% { transform: translate(-50px, -60px) scale(1.12); opacity: 0.75; }
+}
+@keyframes nebula-3 {
+  0%   { transform: translate(0, 0)      scale(0.92); opacity: 1; }
+  45%  { transform: translate(-20px, 25px) scale(1.2);  opacity: 0.8; }
+  100% { transform: translate(-40px, 50px) scale(1);    opacity: 0.95; }
+}
+
+/* Dot grid */
+.dot-grid {
+  position: fixed; inset: 0; z-index: 1;
+  pointer-events: none;
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.09) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0.5) 0%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0.5) 0%, transparent 75%);
+}
+
+/* Hero glow */
+.hero-glow {
+  position: fixed; inset: 0; z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(ellipse 90% 70% at 50% 50%, rgba(255, 181, 71, 0.04) 0%, transparent 100%);
+}
+
+/* Noise texture */
+.noise {
+  position: fixed; inset: 0; z-index: 3;
+  pointer-events: none;
+  opacity: 0.028;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 180px 180px;
+}
+
+/* Edge vignette */
+.vignette {
+  position: fixed; inset: 0; z-index: 2;
+  background: radial-gradient(ellipse at 50% 50%, transparent 40%, rgba(2, 4, 10, 0.65) 100%);
+  pointer-events: none;
 }
 
 .logo-link {
@@ -518,6 +599,15 @@ async function handleSubmit(origin: { x: number; y: number }) {
   opacity: 0.5;
 }
 
+.sub-tagline {
+  font-family: var(--font-ui);
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  letter-spacing: 0.02em;
+  margin: 0;
+  opacity: 0.7;
+}
+
 .formats-footer {
   position: fixed;
   bottom: 28px;
@@ -537,18 +627,22 @@ async function handleSubmit(origin: { x: number; y: number }) {
 .formats-footer.hidden {
   opacity: 0;
 }
-.formats-label {
+.format-icons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.fmt-chip {
   font-size: 0.6rem;
   font-weight: 600;
-  letter-spacing: 0.32em;
-  color: var(--color-accent);
-  opacity: 0.7;
-}
-.formats-list {
-  font-size: 0.66rem;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.1em;
   color: var(--color-text-muted);
-  opacity: 0.55;
+  padding: 3px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 100px;
+  opacity: 0.5;
+  background: rgba(255, 255, 255, 0.02);
 }
 .stage.launching {
   /* Pulled into the black hole — scale toward screen center, fade out. */

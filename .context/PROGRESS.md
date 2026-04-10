@@ -20,26 +20,31 @@ Status: **complete** — landed on `feat/schema-context`
 - [ ] Mock galaxy fixture for frontend development
 
 ### Frontend — Chat Landing
-Status: **complete** (pre-pivot, survives as-is with minor copy changes)
-- [x] Chat landing page (logo, wordmark, tagline, input, suggestion chips, drag-drop)
+Status: **complete** — `pivot/frontend`
+- [x] Chat landing page (logo, wordmark, tagline, input, drag-drop)
 - [x] History system (HistoryButton + HistoryOverlay)
 - [x] Mobile system (bottom-pinned input, safe-area)
-- [x] Galaxy renderer foundation (ambient cosmic void, nebulae, stars)
-- [x] Black-hole launch sequence
-- [ ] **Stubbed** — submit handler + WebGL post-fx
+- [x] Galaxy renderer foundation (ambient cosmic void, nebulae, stars, shooting stars)
+- [x] Black-hole launch sequence (submit → rocket → warp → galaxy)
+- [x] Custom resize grip (1:1 cursor tracking compensates for flex recentering)
+- [x] Background polish — drifting/breathing nebula blobs, dot grid overlay, hero glow, noise texture, edge vignette
+- [x] Placeholder copy updated for memory bank purpose
 
-### Frontend — 3D Galaxy (teammate's workstream)
-Status: **not started** — planned on `revamp/frontend`
+### Frontend — 3D Galaxy
+Status: **complete** — `pivot/frontend`
 
-- [ ] Three.js scene manager
-- [ ] 3D force-directed graph (galaxy view)
-- [ ] Node rendering (EntryKind → mesh, mood+color → appearance)
-- [ ] Edge rendering (EdgeType + weight → line style)
-- [ ] Camera system (OrbitControls + GSAP transitions)
-- [ ] Solar system drill-down
-- [ ] Wrap card overlay (DOM, Spotify-Wrapped-style)
-- [ ] Background / atmosphere (starfield, nebula, bloom, god rays)
-- [ ] Stats page reframe
+- [x] Three.js scene manager (`useThreeScene` composable — bloom, OrbitControls, starfield, resize)
+- [x] 3D force-directed graph — galaxy view (`GalaxyView.vue`, d3-force-3d, cluster nodes as glowing spheres)
+- [x] Particle stream edges (animated points between cluster nodes)
+- [x] Camera fly-in + GSAP transition to solar system with warp-speed star effect (`useWarpEffect`)
+- [x] Solar system drill-down (`SolarSystemView.vue` — central sun, entry nodes by kind, orbit lines)
+- [x] Wrap card overlay (`WrapCard.vue` — full Spotify-Wrapped-style modal with stats, highlights, connections)
+- [x] HTML overlay labels (3D→2D projection, opacity fade by distance, readable at all zoom levels)
+- [x] Spam-click guard (`navigating` ref)
+- [x] Warp-speed effect — outward on enter, inward on exit (`useWarpEffect.ts`)
+- [x] Exploration UI — arc ring progress per cluster (galaxy), visited dot per entry (solar system)
+- [x] Stats page (`StatsView.vue` — SVG arc ring, per-cluster breakdown)
+- [x] Mobile support — larger cameraZ, back button moved to bottom, hover disabled on touch
 
 ### Frontend — Superseded (to be deleted)
 - 2D Canvas renderer, SVG skill tree, SVG planet view, concept scene view
@@ -86,6 +91,8 @@ _Newest at top._
 - 2026-04-11 — **Phase 3: Runner + API complete** — runner.ts rewritten (sequential 0→1→2→2.5, no background path), routes/galaxy.ts cleaned (scene endpoints removed), test-pipeline.ts updated for v3. All Phase 3 files typecheck clean; remaining errors are from Phase 4 deletion targets. — `feat/schema-context`
 - 2026-04-11 — **Phase 1: Schema v3 complete** — all 10 type files in `shared/types/` written (galaxy, knowledge, relationships, wraps, exploration, pipeline, meta, source, ids, index). Cluster/Group/Entry replaces Topic/Subtopic/Concept. 7 scopes, 4 pipeline stages. — `feat/schema-context`
 - 2026-04-11 — **Phase 2: Pipeline Rebuild complete** — compile/index.ts rewritten (compileStructure v3, compileWraps), prompts/structure.ts v3 (cluster/group/entry, EntryKind, aggressive relationships), prompts/wraps.ts NEW (per-node wrap generation), pipeline/skeleton.ts v3, pipeline/wraps.ts NEW (replaces detail.ts, fans out all nodes), pipeline/coverage.ts v3, lib/blob.ts v3, chunker.ts + ingest.ts patched — `feat/schema-context`
+- 2026-04-11 — **Frontend polish pass** — galaxy/solar system label readability, bloom tuning, warp-speed effect, exploration UI (arc rings + visited dots), mobile zoom/layout fixes, custom resize grip with flex-centering compensation, landing page background effects (nebula breathe, dot grid, hero glow, noise). — `pivot/frontend`
+- 2026-04-11 — **3D frontend complete** — GalaxyView, SolarSystemView, WrapCard, StatsView, useThreeScene, useWarpEffect, mockGalaxy fixture. Full navigation flow working with GSAP + warp transitions. — `pivot/frontend`
 - 2026-04-11 — **PIVOT v3: Wrap-based Memory Galaxy** — every node is a Spotify-Wrapped card. Pipeline simplified to 4 stages. Schema reduced to 7 scopes. Stages 3–6 dropped. Frontend derives visuals from kind+mood+color. Context files fully rewritten. — `feat/major-revamp`
 - 2026-04-11 — (superseded) PIVOT v2: Interactive Memory Galaxy — intermediate direction, replaced by v3 same day
 - 2026-04-11 — Parallel sub-session fan-out for Stage 2 + Stage 5 — `main`
