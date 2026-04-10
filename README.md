@@ -37,21 +37,3 @@ CISSA-codebrew-2026/
     ├── server/               # Bun + Hono backend (routes, pipeline, prompts, db, lib)
     └── shared/               # Shared TypeScript types between client & server
 ```
-
-Detailed per-file breakdown (every component, composable, pipeline stage, prompt file) is in `.context/ABOUT.md` under **Project Structure**.
-
-## Jorvan's updates
-- implemented working claude code spawner
-- implemented parser schema (structure can be found in schema.md)
-- parser now actually works but not fully refined and complete (stage 2/6)
-- parser speed is optimised, stage 2 runs in parallel in the background
-- frontend linked to the backend server, can test parser via frontend UI
-- implemented support for pdf, docx, pptx, md, markdown
-- revamped the entire backend structure
-- proxy server fully complete (awaiting nathan's fine tuned workflow)
-
-## Jorvan's todo
-- add image support (jpg, png, jpeg .etc)
-- finish up the parser (stage 3-6), may require frontend coordination
-- prepare proxy server (test and debug proxy deployment)
-- prepare deployment environment and domain
