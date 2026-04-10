@@ -29,9 +29,20 @@ export interface RunResult {
   durationMs: number;
 }
 
+import { config } from "../config";
+
 function buildArgs(req: RunRequest): string[] {
-  const args = ["-p", req.prompt];
-  if (req.model) args.push("--model", req.model);
+  // -p = print mode (non-interactive, exits after responding)
+  // --dangerously-skip-permissions = allow tool use (Write/Edit/Bash)
+  //   without interactive approval. Required because Claude Code in
+  //   print mode with tool access is how the pipeline writes files
+  //   into the workspace stage folders.
+  const model = req.model ?? config.defaultModel;
+  const args = [
+    "-p", req.prompt,
+    "--dangerously-skip-permissions",
+    "--model", model,
+  ];
   return args;
 }
 

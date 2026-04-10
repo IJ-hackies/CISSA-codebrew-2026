@@ -16,11 +16,12 @@ export async function pushFiles(
   galaxyId: string,
   files: Record<string, string>,
   blob?: Galaxy,
+  binaryFiles?: Record<string, string>,
 ): Promise<void> {
   const res = await fetch(`${PROXY_BASE}/session/${galaxyId}/files`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ files, blob }),
+    body: JSON.stringify({ files, blob, binaryFiles }),
   });
   if (!res.ok) {
     throw new Error(

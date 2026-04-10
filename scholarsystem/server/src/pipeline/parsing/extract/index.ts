@@ -15,15 +15,18 @@ import type { SourceKind } from "../../../../../shared/types";
 import type { Extracted } from "./types";
 import { EXTENSION_TO_KIND, UnsupportedFormatError } from "./types";
 import { extractMarkdown } from "./markdown";
-import { extractPdf } from "./pdf";
+import { extractPdf, type PdfExtracted } from "./pdf";
 import { extractDocx } from "./docx";
 import { extractPptx } from "./pptx";
 
 export { UnsupportedFormatError, EXTENSION_TO_KIND } from "./types";
 export type { Extracted } from "./types";
+export type { PdfExtracted } from "./pdf";
 
 export interface ExtractResult extends Extracted {
   kind: SourceKind;
+  /** Present only for PDF extractions — PNG images of each page. */
+  pageImages?: PdfExtracted["pageImages"];
 }
 
 export interface FileInput {

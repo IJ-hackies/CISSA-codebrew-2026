@@ -1,10 +1,10 @@
 import { Hono, type Context } from "hono";
 import { sampleGalaxy } from "../fixtures/sample-galaxy";
 import { loadGalaxy, saveGalaxy } from "../db/store";
-import { runPipeline, runDetailBackground } from "../pipeline/runner";
+import { runPipeline, sanitizeChapterId } from "../pipeline/runner";
 import { createHash } from "node:crypto";
 import { extractFiles, UnsupportedFormatError } from "../pipeline/parsing/extract";
-import type { SourceKind, SourcePart } from "../../../shared/types";
+import type { SourceKind, SourcePart } from "@scholarsystem/shared";
 
 // Mirrors the client's total-size ceiling in `client/src/lib/fileTypes.ts`.
 // This is a CUMULATIVE cap across every file in a multi-upload request so
@@ -55,6 +55,8 @@ interface ResolvedInput {
   text: string;
   title?: string;
   parts?: SourcePart[];
+  /** PDF page images for vision-based extraction in Claude Code. */
+  pageImages?: { page: number; png: Buffer }[];
 }
 
 function hashUtf8(s: string): string {
@@ -117,13 +119,19 @@ async function resolveCreateInput(c: Context): Promise<ResolvedInput> {
     const sections: string[] = [];
     const discoveredTitles: string[] = [];
 
+    // Collect page images from PDF extractions for vision processing.
+    let pageImages: ResolvedInput["pageImages"];
+
     extracted.forEach((ex, i) => {
       const name = fileInputs[i].name;
       const body = ex.text.trim();
-      if (!body) {
+      if (!body && !ex.pageImages?.length) {
         throw new Error(`extraction produced no text from ${name}`);
       }
       if (ex.title) discoveredTitles.push(ex.title);
+      if (ex.pageImages?.length) {
+        pageImages = (pageImages ?? []).concat(ex.pageImages);
+      }
       parts.push({
         kind: ex.kind,
         filename: name,
@@ -161,6 +169,7 @@ async function resolveCreateInput(c: Context): Promise<ResolvedInput> {
       text: combined,
       title: titleField || discoveredTitles[0],
       parts: isMulti ? parts : undefined,
+      pageImages,
     };
   }
 
@@ -194,24 +203,21 @@ galaxyRoutes.post("/create", async (c) => {
   }
 
   try {
+    const chapterId = sanitizeChapterId(resolved.title);
+
     const galaxy = await runPipeline({
+      chapterId,
       kind: resolved.kind,
       filename: resolved.filename,
       text: resolved.text,
       title: resolved.title,
       parts: resolved.parts,
+      pageImages: resolved.pageImages,
     });
     saveGalaxy(galaxy);
 
-    // Fire-and-forget Stage 2. We intentionally don't await: the user
-    // gets the map as soon as structure + layout are persisted, and the
-    // background path re-saves the same row when detail finishes. Any
-    // error inside runDetailBackground is handled there; this top-level
-    // .catch is just a final belt-and-braces guard so an unhandled
-    // rejection can never crash the server from this call site.
-    runDetailBackground(galaxy, resolved.text, saveGalaxy).catch((err) => {
-      console.error("[galaxy/create] background detail guard:", err);
-    });
+    // Stage 2 (detail) is not yet wired through the v2 proxy path.
+    // When it is, fire-and-forget here and re-persist when done.
 
     return c.json(galaxy, 201);
   } catch (err) {

@@ -47,6 +47,8 @@ Detailed per-file breakdown (every component, composable, pipeline stage, prompt
 - parser speed is optimised, stage 2 runs in parallel in the background
 - frontend linked to the backend server, can test parser via frontend UI
 - implemented support for pdf, docx, pptx, md, markdown
+- revamped the entire backend structure
+- proxy server fully complete (awaiting nathan's fine tuned workflow)
 
 ## Jorvan's todo
 - add image support (jpg, png, jpeg .etc)
