@@ -17,15 +17,164 @@ import type {
   Knowledge,
   Concept,
   ConceptDetail,
+  Derivative,
   Slug,
   ChapterId,
 } from "@scholarsystem/shared";
 import { stageStart, stageDone, stageError } from "../lib/blob";
 import { pushFiles, runStage, compileFiles } from "../lib/proxy-client";
-import { parseNote } from "./compile/frontmatter";
+import { parseNote, extractDerivatives } from "./compile/frontmatter";
 
 const MAX_ROUNDS = 3;
-const COVERAGE_THRESHOLD = 0.95; // 95% of source units must be cited
+const COVERAGE_THRESHOLD = 0.95; // 95% of source words must be covered
+
+// ───────── Word-level coverage ─────────
+
+export interface CoverageReport {
+  totalWords: number;
+  coveredWords: number;
+  coveragePercent: number;
+  uncoveredGaps: {
+    wordIndex: number;
+    wordCount: number;
+    preview: string;
+    sourceUnitId: string;
+  }[];
+}
+
+/** Normalize text to lowercase words, stripping punctuation. */
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    // Normalize common OCR/PDF artifacts before stripping.
+    .replace(/[\u201C\u201D]/g, '"')   // smart double quotes
+    .replace(/[\u2018\u2019]/g, "'")   // smart single quotes
+    .replace(/[\u2013\u2014]/g, "-")   // en-dash, em-dash → hyphen
+    .replace(/\uFB01/g, "fi")          // fi ligature
+    .replace(/\uFB02/g, "fl")          // fl ligature
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 0);
+}
+
+/**
+ * Find the best matching position of a quote's word sequence within the
+ * source words, allowing a small gap tolerance (1-2 word mismatches from
+ * cleaning artifacts). Returns [startIndex, endIndex) or null.
+ */
+function findWordRun(
+  sourceWords: string[],
+  quoteWords: string[],
+  startFrom: number = 0,
+): [number, number] | null {
+  if (quoteWords.length === 0) return null;
+
+  const minMatchRatio = 0.6; // at least 60% of quote words must match in sequence
+  let bestStart = -1;
+  let bestEnd = -1;
+  let bestScore = 0;
+
+  for (let i = startFrom; i <= sourceWords.length - Math.min(3, quoteWords.length); i++) {
+    if (sourceWords[i] !== quoteWords[0]) continue;
+
+    // Try to match quote words starting at position i in source.
+    let si = i;
+    let qi = 0;
+    let matched = 0;
+    let gaps = 0;
+
+    while (si < sourceWords.length && qi < quoteWords.length && gaps <= 3) {
+      if (sourceWords[si] === quoteWords[qi]) {
+        matched++;
+        si++;
+        qi++;
+        gaps = 0;
+      } else {
+        gaps++;
+        si++;
+      }
+    }
+
+    // Skip remaining quote words with tolerance.
+    const score = matched / quoteWords.length;
+    if (score >= minMatchRatio && matched > bestScore) {
+      bestScore = matched;
+      bestStart = i;
+      bestEnd = si;
+    }
+  }
+
+  if (bestStart >= 0) return [bestStart, bestEnd];
+  return null;
+}
+
+/**
+ * Compute word-level coverage of source text by derivative quotes.
+ * Ported from flint-comp90054 check-coverage.js algorithm.
+ */
+export function computeWordCoverage(
+  sourceUnits: { id: string; text: string }[],
+  derivatives: { sourceRef: string; quote: string }[],
+): CoverageReport {
+  // Build a flat array of source words with unit-id tracking.
+  const sourceWords: string[] = [];
+  const wordUnitId: string[] = [];
+
+  for (const unit of sourceUnits) {
+    const words = tokenize(unit.text);
+    for (const w of words) {
+      sourceWords.push(w);
+      wordUnitId.push(unit.id);
+    }
+  }
+
+  const covered = new Uint8Array(sourceWords.length); // 0 = uncovered
+
+  // Match each derivative quote against source words.
+  for (const d of derivatives) {
+    const quoteWords = tokenize(d.quote);
+    if (quoteWords.length === 0) continue;
+
+    const run = findWordRun(sourceWords, quoteWords);
+    if (run) {
+      for (let i = run[0]; i < run[1]; i++) {
+        covered[i] = 1;
+      }
+    }
+  }
+
+  // Compute coverage stats and find gaps.
+  let coveredCount = 0;
+  for (let i = 0; i < covered.length; i++) {
+    if (covered[i]) coveredCount++;
+  }
+
+  const uncoveredGaps: CoverageReport["uncoveredGaps"] = [];
+  let i = 0;
+  while (i < sourceWords.length) {
+    if (!covered[i]) {
+      const gapStart = i;
+      while (i < sourceWords.length && !covered[i]) i++;
+      const gapEnd = i;
+      const gapWords = sourceWords.slice(gapStart, gapEnd);
+      uncoveredGaps.push({
+        wordIndex: gapStart,
+        wordCount: gapEnd - gapStart,
+        preview: gapWords.slice(0, 20).join(" ").slice(0, 80),
+        sourceUnitId: wordUnitId[gapStart],
+      });
+    } else {
+      i++;
+    }
+  }
+
+  return {
+    totalWords: sourceWords.length,
+    coveredWords: coveredCount,
+    coveragePercent: sourceWords.length > 0 ? coveredCount / sourceWords.length : 1,
+    uncoveredGaps,
+  };
+}
 
 /**
  * Run Stage 2.5: coverage audit. Computes uncited source units, then
@@ -44,32 +193,46 @@ export async function runCoverageAudit(galaxy: Galaxy): Promise<Galaxy> {
     const chapter = galaxy.source.chapters[galaxy.source.chapters.length - 1];
     if (!chapter) throw new Error("coverageAudit: no source chapters");
 
-    const allUnitIds = new Set(chapter.units.map((u) => u.id));
     const unitTextById = new Map(chapter.units.map((u) => [u.id, u.text]));
+
+    const allUnitIds = new Set(chapter.units.map((u) => u.id));
 
     let round = 0;
     while (round < MAX_ROUNDS) {
       round++;
 
-      // Compute cited units from knowledge + detail.
-      const cited = collectCitedUnits(galaxy);
-      const uncited = [...allUnitIds].filter((id) => !cited.has(id));
-
-      const coverage = allUnitIds.size > 0
-        ? (allUnitIds.size - uncited.length) / allUnitIds.size
+      // ── Primary gate: unit-level coverage (every source unit cited) ──
+      const citedUnitIds = collectCitedUnits(galaxy);
+      const uncitedUnits = [...allUnitIds].filter((id) => !citedUnitIds.has(id));
+      const unitCoverage = allUnitIds.size > 0
+        ? (allUnitIds.size - uncitedUnits.length) / allUnitIds.size
         : 1;
 
+      // ── Supplementary: word-level coverage from derivatives ──
+      const allDerivatives: { sourceRef: string; quote: string }[] = [];
+      for (const entry of Object.values(galaxy.detail)) {
+        if (entry && "derivatives" in entry) {
+          for (const d of (entry as ConceptDetail).derivatives) {
+            allDerivatives.push({ sourceRef: d.sourceRef, quote: d.quote });
+          }
+        }
+      }
+      const wordReport = computeWordCoverage(chapter.units, allDerivatives);
+
       console.log(
-        `[coverage] round ${round}: ${cited.size}/${allUnitIds.size} units cited (${(coverage * 100).toFixed(1)}%), ${uncited.length} uncited`,
+        `[coverage] round ${round}: unit-level ${citedUnitIds.size}/${allUnitIds.size} (${(unitCoverage * 100).toFixed(1)}%), ` +
+        `word-level ${wordReport.coveredWords}/${wordReport.totalWords} (${(wordReport.coveragePercent * 100).toFixed(1)}%), ` +
+        `${uncitedUnits.length} uncited units`,
       );
 
-      if (coverage >= COVERAGE_THRESHOLD || uncited.length === 0) {
-        console.log(`[coverage] threshold met (${(coverage * 100).toFixed(1)}% >= ${(COVERAGE_THRESHOLD * 100).toFixed(0)}%)`);
+      // Pass if unit-level coverage meets threshold.
+      if (unitCoverage >= COVERAGE_THRESHOLD || uncitedUnits.length === 0) {
+        console.log(`[coverage] unit threshold met (${(unitCoverage * 100).toFixed(1)}% >= ${(COVERAGE_THRESHOLD * 100).toFixed(0)}%)`);
         break;
       }
 
-      // Build the gap-audit prompt with uncited passages.
-      const uncitedPassages = uncited
+      // Build passages for Claude from uncited units.
+      const uncitedPassages = uncitedUnits
         .map((id) => `### ${id}\n${unitTextById.get(id) ?? "(text not found)"}`)
         .join("\n\n");
 
@@ -81,7 +244,7 @@ export async function runCoverageAudit(galaxy: Galaxy): Promise<Galaxy> {
         chapterId: chapter.id,
         uncitedPassages,
         existingConcepts,
-        uncitedIds: uncited,
+        uncitedIds: uncitedUnits,
         sourceUnitIds: chapter.units.map((u) => u.id),
       });
 
@@ -175,7 +338,7 @@ ${existingConcepts}
 For EACH uncited source unit, do ONE of:
 
 ### Option A: Attach to an existing concept
-If the uncited passage is covered by an existing concept, write a file to update that concept's citations:
+If the uncited passage is covered by an existing concept, write a file to update that concept's citations. Include a verbatim derivative quote so coverage can be verified at word level:
 
 \`stage2-coverage/${chapterId}-attach-<concept-id>.md\`:
 \`\`\`yaml
@@ -183,6 +346,9 @@ If the uncited passage is covered by an existing concept, write a file to update
 action: attach
 conceptId: <existing-concept-id>
 addSourceRefs: [${chapterId}-s-NNNN, ...]
+derivatives:
+  - sourceRef: ${chapterId}-s-NNNN
+    quote: "exact verbatim passage from the source unit"
 ---
 \`\`\`
 
@@ -196,7 +362,7 @@ action: new-concept
 id: ${chapterId}-<kebab-slug>
 chapter: ${chapterId}
 type: concept
-kind: <definition|formula|example|fact|principle|process>
+kind: <definition|formula|example|fact|principle|process|framework|trade-off|distinction|paradigm|property>
 modelTier: <light|standard|heavy>
 title: <string>
 brief: <1-2 sentence hook>
@@ -265,13 +431,27 @@ function applyGapAuditResults(
             }
           }
 
-          // Update detail sourceRefs if detail exists for this concept.
+          // Update detail sourceRefs and derivatives if detail exists.
           const detail = galaxy.detail[conceptId];
           if (detail && addRefs.length > 0) {
             const existing = new Set(detail.sourceRefs);
             for (const ref of addRefs) {
               if (!existing.has(ref)) {
                 detail.sourceRefs.push(ref as Slug);
+              }
+            }
+
+            // Merge derivative quotes from the gap audit.
+            const newDerivatives = note.data.derivatives as unknown;
+            if (Array.isArray(newDerivatives)) {
+              for (const d of newDerivatives) {
+                if (d && typeof d === "object" && "sourceRef" in d && "quote" in d) {
+                  detail.derivatives.push({
+                    sourceRef: String(d.sourceRef) as Slug,
+                    quote: String(d.quote),
+                  });
+                  detail.sourceQuotes.push(String(d.quote));
+                }
               }
             }
           }
