@@ -2,6 +2,7 @@ import { Hono, type Context } from "hono";
 import { sampleGalaxy } from "../fixtures/sample-galaxy";
 import { loadGalaxy, saveGalaxy } from "../db/store";
 import { runPipeline, sanitizeChapterId } from "../pipeline/runner";
+import { generateScene } from "../pipeline/scene";
 import { createHash } from "node:crypto";
 import { extractFiles, UnsupportedFormatError } from "../pipeline/parsing/extract";
 import type { SourceKind, SourcePart } from "@scholarsystem/shared";
@@ -13,17 +14,10 @@ const MAX_TOTAL_BYTES = 100 * 1024 * 1024; // 100 MB
 
 // Galaxy routes.
 //
-// GET  /:id        — fetch a stored galaxy; falls back to the fixture if
-//                    the id is the fixture id or nothing is stored yet,
-//                    so the frontend branch keeps working pre-pipeline.
-// POST /create     — runs the FAST PATH of the pipeline (ingest → structure
-//                    → layout) synchronously, persists, and responds. Stage 2
-//                    (detail) is kicked off as fire-and-forget AFTER the
-//                    response is sent; it re-persists the galaxy when done.
-//                    See `pipeline/runner.ts` for the execution model.
-//                    Frontend is not notified when background detail lands —
-//                    nothing currently rendered consumes it. Upgrade to
-//                    polling or SSE when a UI surface needs detail state.
+// GET  /:id                       — fetch a stored galaxy
+// POST /create                    — run pipeline fast path, kick off background
+// GET  /:id/scene/:bodyId         — fetch cached scene (404 if not generated)
+// POST /:id/scene/:bodyId/generate — generate scene on-demand (SSE stream)
 export const galaxyRoutes = new Hono();
 
 galaxyRoutes.get("/:id", (c) => {
@@ -236,5 +230,63 @@ galaxyRoutes.post("/create", async (c) => {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[galaxy/create] pipeline failed:", message);
     return c.json({ error: "pipeline failed", message }, 500);
+  }
+});
+
+// ─── Scene endpoints ──────────────────────────────────────────────────
+
+/**
+ * GET /:id/scene/:bodyId — returns cached scene if it exists, 404 otherwise.
+ * The frontend tries this first; if 404, it calls the generate endpoint.
+ */
+galaxyRoutes.get("/:id/scene/:bodyId", (c) => {
+  const { id, bodyId } = c.req.param();
+  const galaxy = loadGalaxy(id);
+  if (!galaxy) return c.json({ error: "galaxy not found" }, 404);
+
+  const scene = galaxy.scenes[bodyId];
+  if (!scene) return c.json({ error: "scene not generated yet" }, 404);
+
+  return c.json(scene);
+});
+
+/**
+ * POST /:id/scene/:bodyId/generate — generate a scene on-demand.
+ *
+ * Returns SSE stream with events:
+ *   - event: status   data: { status: "generating" }
+ *   - event: scene    data: <Scene JSON>
+ *   - event: error    data: { message: "..." }
+ *   - event: done     data: { durationMs: N }
+ *
+ * If a cached scene already exists, returns it immediately without
+ * calling Claude.
+ */
+galaxyRoutes.post("/:id/scene/:bodyId/generate", async (c) => {
+  const { id, bodyId } = c.req.param();
+  const galaxy = loadGalaxy(id);
+  if (!galaxy) return c.json({ error: "galaxy not found" }, 404);
+
+  // Check cache — return immediately if already generated.
+  const cached = galaxy.scenes[bodyId];
+  if (cached) {
+    return c.json(cached);
+  }
+
+  // Validate body exists and is interactive.
+  const body = galaxy.spatial?.bodies.find((b) => b.id === bodyId);
+  if (!body) return c.json({ error: "body not found" }, 404);
+  if (!("knowledgeRef" in body) || !body.knowledgeRef) {
+    return c.json({ error: "body is not interactive" }, 400);
+  }
+
+  // Generate scene (may call Claude or fall back to deterministic).
+  try {
+    const { scene, durationMs } = await generateScene(galaxy, bodyId);
+    return c.json(scene);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[scene] generation failed for ${bodyId}:`, message);
+    return c.json({ error: "scene generation failed", message }, 500);
   }
 });

@@ -34,7 +34,12 @@
       "Bash(findstr /i \"bun node claude\")",
       "Bash(wmic process:*)",
       "Bash(powershell:*)",
-      "Bash(cmd:*)"
+      "Bash(cmd:*)",
+      "Bash(find:*)",
+      "Bash(npx vue-tsc:*)",
+      "Bash(node_modules/.bin/tsc --project server/tsconfig.json --noEmit)",
+      "Bash(bun x:*)",
+      "Bash(ls:*)"
     ]
   }
 }

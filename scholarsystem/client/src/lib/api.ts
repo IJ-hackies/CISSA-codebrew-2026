@@ -80,3 +80,39 @@ export async function getGalaxy(id: string): Promise<GalaxyBlob> {
   }
   return (await res.json()) as GalaxyBlob
 }
+
+// ─── Scene endpoints ──────────────────────────────────────────────────
+
+/**
+ * Fetch a cached scene. Returns null if the scene hasn't been generated.
+ */
+export async function getScene(galaxyId: string, bodyId: string): Promise<unknown | null> {
+  const res = await fetch(
+    `/api/galaxy/${encodeURIComponent(galaxyId)}/scene/${encodeURIComponent(bodyId)}`,
+  )
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+/**
+ * Generate a scene on-demand. Calls Claude if needed, returns the Scene JSON.
+ * Falls back to deterministic generation if Claude fails.
+ */
+export async function generateScene(galaxyId: string, bodyId: string): Promise<unknown> {
+  const res = await fetch(
+    `/api/galaxy/${encodeURIComponent(galaxyId)}/scene/${encodeURIComponent(bodyId)}/generate`,
+    { method: 'POST' },
+  )
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`
+    try {
+      const err = (await res.json()) as { error?: string; message?: string }
+      detail = err.message ?? err.error ?? detail
+    } catch {
+      // non-JSON error body
+    }
+    throw new Error(detail)
+  }
+  return res.json()
+}

@@ -1,15 +1,12 @@
-// Stage 5: Visuals.
+// Stage 5: Visuals (parallel sub-session fan-out).
 //
-// Generates per-body visual parameters so the galaxy reads as one coherent
-// place across chapters. Two paths:
+// Each knowledge-bearing body gets its own isolated proxy sub-session
+// with a focused Claude Code agent (Haiku) that creates exactly ONE
+// visual file. Sub-sessions run in parallel.
 //
-//   KNOWLEDGE-BEARING bodies (galaxy, system, planet, moon, asteroid):
-//     Claude Code via proxy, guided by narrative.canon.aesthetic.
+// Decorative bodies are still themed by pure code (zero Claude calls).
 //
-//   DECORATIVE bodies (star, nebula, comet, black-hole, dust-cloud, asteroid-belt):
-//     Pure code, themed from narrative.canon.aesthetic. Zero Claude calls.
-//
-// Also pre-computes two deterministic assignments before the Claude call:
+// Also pre-computes deterministic assignments before fan-out:
 //   - biome: picked per subtopic (all moons under one subtopic share a biome)
 //   - character: picked per concept based on concept kind
 //
@@ -28,8 +25,13 @@ import type {
 } from "@scholarsystem/shared";
 import { KNOWLEDGE_BEARING_KINDS, DECORATIVE_KINDS } from "@scholarsystem/shared";
 import { stageStart, stageDone, stageError } from "../lib/blob";
-import { pushFiles, runStage, compileFiles } from "../lib/proxy-client";
-import { buildVisualsPrompt } from "../prompts/worldgen/visuals";
+import {
+  pushFiles,
+  fanOutSubSessions,
+  mergeSubSessionFiles,
+  type SubSessionTask,
+} from "../lib/proxy-client";
+import { buildSingleBodyVisualPrompt } from "../prompts/worldgen/visuals";
 import { compileVisuals } from "./compile";
 
 /**
@@ -77,113 +79,125 @@ export async function runVisualsStage(galaxy: Galaxy): Promise<Galaxy> {
     const subtopicBiomes = assignBiomesPerSubtopic(galaxy);
     const conceptCharacters = assignCharactersPerConcept(galaxy);
 
-    // ── Claude path: knowledge-bearing bodies ──
-    //
-    // Run in batches to avoid overwhelming Claude with 40+ file
-    // creates in one prompt. Group by parent system — each batch
-    // contains the system + its planets + their moons. Root-level
-    // bodies (galaxy, loose asteroids) go in a first batch.
+    // ── Claude path: knowledge-bearing bodies via parallel sub-sessions ──
+
     if (knowledgeBearing.length > 0) {
-      // Push narrative canon so Claude can reference it from the workspace.
-      await pushFiles(galaxy.meta.id, {
-        "stage3-narrative/canon-ref.md": `---\naesthetic: ${JSON.stringify(canon.aesthetic)}\ntone: ${JSON.stringify(canon.tone)}\nsetting: ${JSON.stringify(canon.setting)}\n---\n`,
-      });
+      // Pre-compute system palettes: first pass themes systems, then
+      // planets/moons/asteroids can reference their parent system's palette.
+      // We do this in two waves: systems first, then everything else.
+      const systems = knowledgeBearing.filter((b) => b.kind === "system" || b.kind === "galaxy");
+      const nonSystems = knowledgeBearing.filter((b) => b.kind !== "system" && b.kind !== "galaxy");
 
-      const batches = batchBodiesBySystem(knowledgeBearing, allBodies);
-      let totalThemed = 0;
+      // Wave 1: systems + galaxy (run in parallel).
+      const systemPalettes = new Map<string, { primary: string; secondary: string; accent: string }>();
 
-      console.log(
-        `[visuals] splitting ${knowledgeBearing.length} knowledge-bearing bodies into ${batches.length} batch(es)`,
-      );
-
-      for (let bi = 0; bi < batches.length; bi++) {
-        const batch = batches[bi];
-        const prompt = buildVisualsPrompt({
-          bodies: batch.bodies,
-          spatial: galaxy.spatial,
-          canon,
-          knowledge: galaxy.knowledge,
-          subtopicBiomes,
-          conceptCharacters,
-        });
-
-        console.log(
-          `[visuals] batch ${bi + 1}/${batches.length} "${batch.label}": ${batch.bodies.length} bodies (prompt ~${Math.round(prompt.length / 1000)}k chars)`,
+      if (systems.length > 0) {
+        const systemTasks: SubSessionTask[] = systems.map((body) =>
+          buildVisualTask(galaxy.meta.id, body, canon, galaxy.knowledge!, subtopicBiomes, conceptCharacters),
         );
 
-        const result = await runStage({
-          galaxyId: galaxy.meta.id,
-          prompt,
-        });
-
         console.log(
-          `[visuals] batch ${bi + 1} finished: ok=${result.ok}, exitCode=${result.exitCode}, duration=${result.durationMs}ms`,
+          `[visuals] wave 1: ${systemTasks.length} system/galaxy bodies (Haiku)`,
         );
 
-        if (!result.ok) {
-          console.warn(
-            `[visuals] batch ${bi + 1} "${batch.label}" failed (exit ${result.exitCode}), skipping`,
-          );
-          continue;
+        const systemResults = await fanOutSubSessions(systemTasks);
+        const systemFiles = mergeSubSessionFiles(systemResults, "stage5-visuals/");
+
+        if (Object.keys(systemFiles).length > 0) {
+          await pushFiles(galaxy.meta.id, systemFiles);
         }
 
-        // Compile workspace files into Visuals record.
-        const files = await compileFiles(galaxy.meta.id);
-        const visualFileCount = Object.keys(files).filter((p) => p.startsWith("stage5-visuals/")).length;
+        const systemCompiled = compileVisuals(systemFiles);
 
-        if (visualFileCount === 0) {
-          const prefixes = new Set(Object.keys(files).map((p) => p.split("/")[0]));
-          console.warn(
-            `[visuals] batch ${bi + 1} produced 0 stage5-visuals/ files. Workspace prefixes: ${[...prefixes].join(", ")}`,
-          );
-          // Check for mispaths.
-          const visualsAnywhere = Object.keys(files).filter((p) =>
-            p.includes("visual") || p.includes("stage5"),
-          );
-          if (visualsAnywhere.length > 0) {
-            console.warn(`[visuals] found at unexpected paths: ${visualsAnywhere.slice(0, 5).join(", ")}`);
-          }
-        }
-
-        const compiled = compileVisuals(files);
-
-        for (const [bodyId, visual] of Object.entries(compiled.visuals)) {
+        for (const [bodyId, visual] of Object.entries(systemCompiled.visuals)) {
           if (!existingVisualIds.has(bodyId)) {
             galaxy.visuals[bodyId] = visual;
             existingVisualIds.add(bodyId);
-            totalThemed++;
+          }
+          // Extract palette for child bodies.
+          if ("palette" in visual) {
+            systemPalettes.set(bodyId, visual.palette);
           }
         }
+
+        console.log(
+          `[visuals] wave 1 complete: ${Object.keys(systemCompiled.visuals).length}/${systems.length} themed`,
+        );
       }
 
-      console.log(
-        `[visuals] ${totalThemed}/${knowledgeBearing.length} knowledge-bearing bodies themed by Claude`,
-      );
+      // Wave 2: planets, moons, asteroids (run in parallel, with system palette hints).
+      if (nonSystems.length > 0) {
+        const bodyTasks: SubSessionTask[] = nonSystems.map((body) => {
+          // Find parent system's palette for coherence hint.
+          const parentId = "parentId" in body ? body.parentId : undefined;
+          let systemPalette: { primary: string; secondary: string; accent: string } | undefined;
+          if (parentId) {
+            // For moons, parent is a planet — find the planet's parent system.
+            systemPalette = systemPalettes.get(parentId);
+            if (!systemPalette) {
+              const parentBody = allBodies.find((b) => b.id === parentId);
+              if (parentBody && "parentId" in parentBody && parentBody.parentId) {
+                systemPalette = systemPalettes.get(parentBody.parentId);
+              }
+            }
+          }
 
-      // ── Retry pass for bodies still missing visuals ──
-      const stillMissing = knowledgeBearing.filter((b) => !existingVisualIds.has(b.id));
-      if (stillMissing.length > 0) {
+          return buildVisualTask(
+            galaxy.meta.id, body, canon, galaxy.knowledge!,
+            subtopicBiomes, conceptCharacters, systemPalette,
+          );
+        });
+
         console.log(
-          `[visuals] retrying ${stillMissing.length} bodies that failed validation or were missed`,
+          `[visuals] wave 2: ${bodyTasks.length} planet/moon/asteroid bodies (Haiku)`,
         );
 
-        const retryPrompt = buildVisualsPrompt({
-          bodies: stillMissing,
-          spatial: galaxy.spatial,
-          canon,
-          knowledge: galaxy.knowledge,
-          subtopicBiomes,
-          conceptCharacters,
-        });
+        const bodyResults = await fanOutSubSessions(bodyTasks);
+        const bodyFiles = mergeSubSessionFiles(bodyResults, "stage5-visuals/");
 
-        const retryResult = await runStage({
-          galaxyId: galaxy.meta.id,
-          prompt: retryPrompt,
-        });
+        if (Object.keys(bodyFiles).length > 0) {
+          await pushFiles(galaxy.meta.id, bodyFiles);
+        }
 
-        if (retryResult.ok) {
-          const retryFiles = await compileFiles(galaxy.meta.id);
+        const bodyCompiled = compileVisuals(bodyFiles);
+
+        let wave2Themed = 0;
+        for (const [bodyId, visual] of Object.entries(bodyCompiled.visuals)) {
+          if (!existingVisualIds.has(bodyId)) {
+            galaxy.visuals[bodyId] = visual;
+            existingVisualIds.add(bodyId);
+            wave2Themed++;
+          }
+        }
+
+        console.log(
+          `[visuals] wave 2 complete: ${wave2Themed}/${nonSystems.length} themed`,
+        );
+
+        // ── Retry pass for bodies still missing visuals ──
+        const allKB = [...systems, ...nonSystems];
+        const stillMissing = allKB.filter((b) => !existingVisualIds.has(b.id));
+        if (stillMissing.length > 0) {
+          console.log(
+            `[visuals] retrying ${stillMissing.length} bodies that failed`,
+          );
+
+          const retryTasks: SubSessionTask[] = stillMissing.map((body) =>
+            buildVisualTask(
+              galaxy.meta.id, body, canon, galaxy.knowledge!,
+              subtopicBiomes, conceptCharacters, undefined, true,
+            ),
+          );
+
+          const retryResults = await fanOutSubSessions(retryTasks);
+          const retryFiles = mergeSubSessionFiles(retryResults, "stage5-visuals/");
+
+          if (Object.keys(retryFiles).length > 0) {
+            await pushFiles(galaxy.meta.id, retryFiles);
+          }
+
           const retryCompiled = compileVisuals(retryFiles);
+
           let retryCount = 0;
           for (const [bodyId, visual] of Object.entries(retryCompiled.visuals)) {
             if (!existingVisualIds.has(bodyId)) {
@@ -195,10 +209,13 @@ export async function runVisualsStage(galaxy: Galaxy): Promise<Galaxy> {
           console.log(
             `[visuals] retry pass themed ${retryCount}/${stillMissing.length} remaining bodies`,
           );
-        } else {
-          console.warn(`[visuals] retry pass failed (exit ${retryResult.exitCode})`);
         }
       }
+
+      const totalThemed = knowledgeBearing.filter((b) => existingVisualIds.has(b.id)).length;
+      console.log(
+        `[visuals] ${totalThemed}/${knowledgeBearing.length} knowledge-bearing bodies themed by Claude`,
+      );
     }
 
     // ── Code path: decorative bodies ──
@@ -225,61 +242,50 @@ export async function runVisualsStage(galaxy: Galaxy): Promise<Galaxy> {
   }
 }
 
-// ───────── Body batching ─────────
-//
-// Groups knowledge-bearing bodies into batches by parent system so each
-// Claude call handles a manageable number of files (typically 5-15).
+// ───────── Sub-session task builder ─────────
 
-interface BodyBatch {
-  label: string;
-  bodies: Body[];
-}
+function buildVisualTask(
+  galaxyId: string,
+  body: Body,
+  canon: NarrativeCanon,
+  knowledge: import("@scholarsystem/shared").Knowledge,
+  subtopicBiomes: Record<string, string>,
+  conceptCharacters: Record<string, string>,
+  systemPalette?: { primary: string; secondary: string; accent: string },
+  isRetry = false,
+): SubSessionTask {
+  const ref = "knowledgeRef" in body ? body.knowledgeRef : null;
 
-function batchBodiesBySystem(
-  knowledgeBearing: Body[],
-  allBodies: Body[],
-): BodyBatch[] {
-  // Find all system bodies.
-  const systems = knowledgeBearing.filter((b) => b.kind === "system");
-  const batches: BodyBatch[] = [];
-
-  // Collect root-level bodies (galaxy, loose asteroids without a system parent).
-  const rootBodies = knowledgeBearing.filter(
-    (b) => b.kind === "galaxy" || (b.kind === "asteroid" && !systems.some((s) => s.id === b.parentId)),
-  );
-  if (rootBodies.length > 0) {
-    batches.push({ label: "root", bodies: rootBodies });
+  // Determine biome and character for moons/asteroids.
+  let biome: string | undefined;
+  let character: string | undefined;
+  if (body.kind === "moon" && ref) {
+    const sub = knowledge.subtopics.find((s) => s.conceptIds.includes(ref));
+    biome = sub ? subtopicBiomes[sub.id] : "neon-city";
+    character = conceptCharacters[ref] ?? "sage";
+  } else if (body.kind === "asteroid" && ref) {
+    biome = "floating-islands";
+    character = conceptCharacters[ref] ?? "trickster";
   }
 
-  // For each system, collect the system + its planets + their moons.
-  for (const sys of systems) {
-    const batch: Body[] = [sys];
+  const prompt = buildSingleBodyVisualPrompt({
+    body,
+    canon,
+    knowledge,
+    biome,
+    character,
+    systemPalette,
+  });
 
-    // Find planets under this system.
-    const planets = knowledgeBearing.filter(
-      (b) => b.kind === "planet" && b.parentId === sys.id,
-    );
-    batch.push(...planets);
+  const prefix = isRetry ? `${galaxyId}--vr--` : `${galaxyId}--v--`;
 
-    // Find moons under those planets.
-    for (const planet of planets) {
-      const moons = knowledgeBearing.filter(
-        (b) => b.kind === "moon" && b.parentId === planet.id,
-      );
-      batch.push(...moons);
-    }
-
-    // Find asteroids directly under this system.
-    const sysAsteroids = knowledgeBearing.filter(
-      (b) => b.kind === "asteroid" && b.parentId === sys.id,
-    );
-    batch.push(...sysAsteroids);
-
-    const sysLabel = (sys as any).knowledgeRef ?? (sys as any).id ?? "unknown";
-    batches.push({ label: `system:${sysLabel}`, bodies: batch });
-  }
-
-  return batches;
+  return {
+    sessionId: `${prefix}${body.id}`,
+    files: {}, // Visual prompts don't need source files — all context is in the prompt.
+    prompt,
+    model: "haiku",
+    label: body.id,
+  };
 }
 
 // ───────── Biome assignment ─────────

@@ -135,3 +135,160 @@ export async function destroySession(galaxyId: string): Promise<void> {
     );
   }
 }
+
+// ─── Sub-session fan-out helpers ─────────────────────────────────
+//
+// Sub-sessions are lightweight, isolated proxy sessions used for
+// parallel fan-out stages (detail, visuals). Each sub-session gets
+// its own workspace and Claude Code process, so there's no
+// single-writer conflict. The pattern:
+//
+//   1. Define a SubSessionTask (id, files to push, prompt)
+//   2. Call fanOutSubSessions() with the array of tasks
+//   3. It runs them in parallel (up to concurrency limit),
+//      collects output files from each, and cleans up
+//   4. Returns merged files ready for the compile step
+
+export interface SubSessionTask {
+  /** Sub-session ID (e.g. `galaxyId--d--conceptId`). Must be unique. */
+  sessionId: string;
+  /** Files to push into the sub-session workspace before running. */
+  files: Record<string, string>;
+  /** The prompt for the Claude Code agent. */
+  prompt: string;
+  /** Optional model override (e.g. "haiku" for visuals). */
+  model?: string;
+  /** Label for logging (e.g. concept id). */
+  label: string;
+}
+
+export interface SubSessionResult {
+  label: string;
+  sessionId: string;
+  ok: boolean;
+  files: Record<string, string>;
+  durationMs: number;
+  error?: string;
+}
+
+/**
+ * Run multiple sub-sessions in parallel. Each gets its own proxy
+ * workspace, runs a single Claude Code agent, and returns its
+ * output files. Workspaces are cleaned up after collection.
+ *
+ * Concurrency is bounded by the proxy's worker pool (maxConcurrency),
+ * but we also apply a client-side limit to avoid overwhelming the
+ * proxy with queued requests.
+ *
+ * @param tasks - Array of sub-session definitions
+ * @param concurrency - Max parallel requests from the client side (default 10)
+ * @returns Results for each task (including failures)
+ */
+export async function fanOutSubSessions(
+  tasks: SubSessionTask[],
+  concurrency = 10,
+): Promise<SubSessionResult[]> {
+  const results: SubSessionResult[] = [];
+  let idx = 0;
+
+  async function runOne(task: SubSessionTask): Promise<SubSessionResult> {
+    const started = Date.now();
+    try {
+      // 1. Create workspace and push scoped files.
+      await pushFiles(task.sessionId, task.files);
+
+      // 2. Run the Claude Code agent.
+      const result = await runStage({
+        galaxyId: task.sessionId,
+        prompt: task.prompt,
+        model: task.model,
+      });
+
+      if (!result.ok) {
+        return {
+          label: task.label,
+          sessionId: task.sessionId,
+          ok: false,
+          files: {},
+          durationMs: Date.now() - started,
+          error: `exit code ${result.exitCode}`,
+        };
+      }
+
+      // 3. Collect output files.
+      const files = await compileFiles(task.sessionId);
+
+      return {
+        label: task.label,
+        sessionId: task.sessionId,
+        ok: true,
+        files,
+        durationMs: Date.now() - started,
+      };
+    } catch (err) {
+      return {
+        label: task.label,
+        sessionId: task.sessionId,
+        ok: false,
+        files: {},
+        durationMs: Date.now() - started,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    } finally {
+      // 4. Clean up the sub-session workspace (best-effort).
+      destroySession(task.sessionId).catch(() => {});
+    }
+  }
+
+  // Semaphore-style concurrency control.
+  async function worker(): Promise<void> {
+    while (idx < tasks.length) {
+      const taskIdx = idx++;
+      const task = tasks[taskIdx];
+      console.log(
+        `[fan-out] starting ${task.label} (${taskIdx + 1}/${tasks.length})`,
+      );
+      const result = await runOne(task);
+      results.push(result);
+      if (result.ok) {
+        console.log(
+          `[fan-out] ${task.label} done (${result.durationMs}ms)`,
+        );
+      } else {
+        console.warn(
+          `[fan-out] ${task.label} failed: ${result.error}`,
+        );
+      }
+    }
+  }
+
+  // Launch `concurrency` workers.
+  const workers = Array.from(
+    { length: Math.min(concurrency, tasks.length) },
+    () => worker(),
+  );
+  await Promise.all(workers);
+
+  return results;
+}
+
+/**
+ * Merge output files from multiple sub-session results into one
+ * flat record, as if all files lived in a single workspace.
+ * Filters to a specific stage folder prefix.
+ */
+export function mergeSubSessionFiles(
+  results: SubSessionResult[],
+  stagePrefix: string,
+): Record<string, string> {
+  const merged: Record<string, string> = {};
+  for (const result of results) {
+    if (!result.ok) continue;
+    for (const [path, content] of Object.entries(result.files)) {
+      if (path.startsWith(stagePrefix)) {
+        merged[path] = content;
+      }
+    }
+  }
+  return merged;
+}

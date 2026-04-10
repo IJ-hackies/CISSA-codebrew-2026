@@ -2,12 +2,15 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useGalaxyStore } from '@/lib/galaxyStore'
+import { getScene, generateScene as apiGenerateScene } from '@/lib/api'
 import SceneBackground from '@/components/scene/SceneBackground.vue'
 import CharacterSprite from '@/components/scene/CharacterSprite.vue'
 import DialogueBox from '@/components/scene/DialogueBox.vue'
 import ChallengePanel from '@/components/scene/ChallengePanel.vue'
 import type { Biome } from '@/components/scene/SceneBackground.vue'
 import type { CharacterId, AnimationId } from '@/components/scene/CharacterSprite.vue'
+import type { Challenge } from '@/components/scene/minigames/index'
+import type { DialogueLine } from '@/components/scene/DialogueBox.vue'
 import type { Concept } from '@/types/galaxy'
 import {
   pickArchetype,
@@ -30,6 +33,10 @@ const phase = ref<Phase>('loading')
 
 // ─── Data loading ──────────────────────────────────────────────────────
 const loading = ref(false)
+const generatingScene = ref(false)
+
+// Backend scene data (null = use mock fallback).
+const backendScene = ref<any>(null)
 
 onMounted(async () => {
   const id = route.params.id as string
@@ -37,14 +44,50 @@ onMounted(async () => {
   loading.value = true
   await loadGalaxy(id)
   loading.value = false
-  const arc = concept.value ? pickArchetype(toConceptLike(concept.value)) : 'guardian-dialogue'
+
+  const arc = archetype.value
   // guardian-dialogue and memory-echo open with full NPC dialogue
   if (arc === 'guardian-dialogue' || arc === 'memory-echo') {
     phase.value = 'dialogue'
   } else {
     phase.value = 'narrative'
   }
+
+  // Fire-and-forget: try to fetch/generate a real scene in the background.
+  // The scene starts with mock data immediately. If a backend scene arrives
+  // before the user reaches the challenge, the computeds swap it in
+  // reactively. If not, mock works fine and the scene gets cached for
+  // revisits.
+  tryLoadScene(id)
 })
+
+/**
+ * Try to load a scene from the backend. Falls back to mock if unavailable.
+ * Non-blocking — the component renders with mock data while this runs.
+ */
+async function tryLoadScene(galaxyId: string) {
+  const bId = bodyId.value
+  if (!bId) return
+
+  try {
+    // 1. Check if a cached scene already exists.
+    const cached = await getScene(galaxyId, bId)
+    if (cached) {
+      backendScene.value = cached
+      return
+    }
+
+    // 2. Generate on-demand.
+    generatingScene.value = true
+    const scene = await apiGenerateScene(galaxyId, bId)
+    backendScene.value = scene
+  } catch (err) {
+    // Silently fall back to mock scene — the user still gets to play.
+    console.warn('[ConceptScene] backend scene unavailable, using mock:', err)
+  } finally {
+    generatingScene.value = false
+  }
+}
 
 // ─── Concept data ──────────────────────────────────────────────────────
 const conceptId = computed(() => route.params.conceptId as string)
@@ -57,6 +100,17 @@ const parentSubtopic = computed(() => {
   const g = galaxy.value
   if (!g?.knowledge || !conceptId.value) return null
   return g.knowledge.subtopics.find((s) => s.conceptIds.includes(conceptId.value)) ?? null
+})
+
+// ─── Body ID lookup ────────────────────────────────────────────────────
+const bodyId = computed<string | null>(() => {
+  const g = galaxy.value
+  const c = concept.value
+  if (!g?.spatial || !c) return null
+  const body = g.spatial.bodies.find(
+    (b) => 'knowledgeRef' in b && b.knowledgeRef === c.id,
+  )
+  return body?.id ?? null
 })
 
 // ─── Neighbours for challenge generation ──────────────────────────────
@@ -162,7 +216,12 @@ const archetype = computed<Archetype>(() =>
   concept.value ? pickArchetype(toConceptLike(concept.value)) : 'guardian-dialogue',
 )
 
-const challenge = computed(() => {
+const challenge = computed<Challenge | null>(() => {
+  // Use backend scene challenge if available.
+  if (backendScene.value?.challenge) {
+    return backendScene.value.challenge as Challenge
+  }
+  // Fall back to mock.
   const c = concept.value
   if (!c) return null
   const cl   = toConceptLike(c)
@@ -170,9 +229,13 @@ const challenge = computed(() => {
   return generateChallenge(cl, neighbours.value, type)
 })
 
-const openingNarrative = computed(() =>
-  concept.value ? getOpeningNarrative(toConceptLike(concept.value), archetype.value) : '',
-)
+const openingNarrative = computed(() => {
+  // Use backend scene narrative if available.
+  if (backendScene.value?.openingNarrative) {
+    return backendScene.value.openingNarrative as string
+  }
+  return concept.value ? getOpeningNarrative(toConceptLike(concept.value), archetype.value) : ''
+})
 
 // ─── Archetype label ──────────────────────────────────────────────────
 const ARCHETYPE_LABELS: Record<Archetype, string> = {
@@ -199,7 +262,16 @@ function onEmotionChange(anim: AnimationId) {
 }
 
 // ─── Dialogue lines ─────────────────────────────────────────────────────
-const dialogueLines = computed(() => {
+const dialogueLines = computed<DialogueLine[]>(() => {
+  // Use backend scene dialogue if available.
+  if (backendScene.value?.dialogue?.length) {
+    return (backendScene.value.dialogue as any[]).map((line) => ({
+      speaker: line.speakerId ? 'npc' : 'npc',
+      text: line.text,
+      emotion: 'neutral' as const,
+    }))
+  }
+  // Fall back to mock.
   const c = concept.value
   if (!c) return []
   return mockGenerateDialogue(toConceptLike(c))
@@ -279,6 +351,14 @@ function goBack() {
     <Transition name="fade">
       <div v-if="loading" class="state-overlay">
         <span class="state-text">Entering the scene…</span>
+      </div>
+    </Transition>
+
+    <!-- ─── Scene generating indicator ────────────────────────────────── -->
+    <Transition name="fade">
+      <div v-if="generatingScene && !loading" class="generating-badge">
+        <span class="generating-dot" />
+        <span class="generating-text">Generating scene…</span>
       </div>
     </Transition>
 
@@ -444,6 +524,39 @@ function goBack() {
   padding: 3px 10px;
   border-radius: 999px;
   border: 1px solid;
+}
+
+/* ─── Generating badge ───────────────────────────────────────────── */
+.generating-badge {
+  position: fixed;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border-radius: 999px;
+  background: rgba(4, 6, 14, 0.85);
+  border: 1px solid rgba(232, 236, 242, 0.12);
+  backdrop-filter: blur(12px);
+}
+.generating-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #4a9eff;
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.4; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+.generating-text {
+  font-family: var(--font-ui);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  color: var(--color-text-muted);
 }
 
 /* ─── Character stage ─────────────────────────────────────────────── */
