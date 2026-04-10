@@ -17,12 +17,21 @@ export const SCHEMA_VERSION = 2;
 // is ingested — first upload and every subsequent extension. Powers
 // provenance queries ("which bodies came from week 2?") and the
 // "new constellation unlocked" UX on extension.
+export const ThematicGroup = z.object({
+  name: z.string(),
+  conceptIds: z.array(Slug),
+});
+
 export const ChapterEntry = z.object({
   id: ChapterId,
   uploadedAt: z.number().int(),
   filename: z.string().nullable(),
   addedKnowledgeIds: z.array(Slug),
   addedBodyIds: z.array(Slug),
+  // Flint-style metadata — informational, not load-bearing.
+  structureNote: z.string().nullable().default(null),
+  thematicGroups: z.array(ThematicGroup).default([]),
+  etcContent: z.string().nullable().default(null),
 });
 
 export const Meta = z.object({
@@ -39,3 +48,4 @@ export const Meta = z.object({
 
 export type Meta = z.infer<typeof Meta>;
 export type ChapterEntry = z.infer<typeof ChapterEntry>;
+export type ThematicGroup = z.infer<typeof ThematicGroup>;

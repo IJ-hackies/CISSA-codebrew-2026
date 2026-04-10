@@ -44,6 +44,35 @@ export const Lighting = z.enum([
   "starlight",
 ]);
 
+// ───────── Scene environment + NPC assignment (moon/asteroid only) ─────
+
+// All concepts within one subtopic share a biome.
+export const Biome = z.enum([
+  "crystal-cave",
+  "alien-ruins",
+  "space-station",
+  "volcanic-surface",
+  "frozen-tundra",
+  "jungle-canopy",
+  "deep-ocean",
+  "desert-mesa",
+  "floating-islands",
+  "neon-city",
+]);
+
+// Which NPC archetype appears in scenes on this body.
+// Assignment follows concept kind: definition/principle → sage,
+// formula/process → engineer, example → archivist, fact → trickster.
+// warrior and echo are rare, reserved for dramatic heavy-tier concepts.
+export const SceneCharacterRole = z.enum([
+  "sage",
+  "engineer",
+  "warrior",
+  "archivist",
+  "trickster",
+  "echo",
+]);
+
 // ───────── Knowledge-bearing body visuals ─────────
 
 export const GalaxyVisual = z.object({
@@ -77,12 +106,16 @@ export const MoonVisual = z.object({
   terrain: Terrain,
   cratered: z.boolean(),
   glow: z.boolean(),
+  biome: Biome,
+  character: SceneCharacterRole,
 });
 
 export const AsteroidVisual = z.object({
   kind: z.literal("asteroid"),
   palette: Palette,
   shape: z.enum(["angular", "elongated", "clustered"]),
+  biome: Biome,
+  character: SceneCharacterRole,
 });
 
 // ───────── Decorative body visuals ─────────
@@ -145,3 +178,5 @@ export const Visuals = z.record(Slug, BodyVisual);
 export type Palette = z.infer<typeof Palette>;
 export type BodyVisual = z.infer<typeof BodyVisual>;
 export type Visuals = z.infer<typeof Visuals>;
+export type Biome = z.infer<typeof Biome>;
+export type SceneCharacterRole = z.infer<typeof SceneCharacterRole>;

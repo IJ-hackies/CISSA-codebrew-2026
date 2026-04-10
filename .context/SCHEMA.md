@@ -11,7 +11,7 @@ Source of truth: `scholarsystem/shared/types/` (Zod). TypeScript types are deriv
 | 1 | `meta` | Stage 0 (ingest) | id, schemaVersion, timestamps, title, **chapters[]** (upload history + which knowledge/body ids each chapter added) |
 | 2 | `source` | Stage 0 | per-chapter input provenance (kind, filename, hash, excerpt) **+ stable numbered source units** that every downstream artifact cites |
 | 3 | `knowledge` | Stage 1 (structure) | hierarchical tree: topics → subtopics → concepts (flat arrays with id refs); every node carries `sourceRefs` + `chapter` |
-| 4 | `detail` | Stage 2 (detail) | deep per-concept content, keyed by concept id; every entry carries `sourceRefs` (`.min(1)`) |
+| 4 | `detail` | Stage 2 (detail) | deep per-concept content, keyed by concept id; every entry carries `derivatives[]` (verbatim quotes, `.min(1)`) + derived `sourceRefs` + `sourceQuotes` |
 | 5 | `relationships` | Stage 1 + wikilinks | flat graph of cross-node edges (prerequisite/related/contrasts/example-of), may cross chapters |
 | 6 | `narrative` | Stage 3 | split into **`canon`** (setting, protagonist, cast, aesthetic, tone — frozen after first generation) and **`arcs[]`** (per-chapter beats, extendable) |
 | 7 | `spatial` | Stage 4 (layout) | polymorphic body layout, discriminated by `kind`; positions pinned across chapter extensions |
@@ -41,9 +41,9 @@ Stage 4 is pure code and runs in parallel with Stage 3 the moment Stage 1 finish
 The guarantee "no source content silently dropped" is mechanical, not trust-based.
 
 - **Ingest chunks every source into stable numbered units** (`w1-s-0001`, `w1-s-0002`, …) at Stage 0. Units are immutable once written and stored under `source.chapters[].units`.
-- **Every derived artifact cites source units.** Every `knowledge` node, every `detail` entry, every `relationships` edge carries a `sourceRefs: Slug[]` array. Zod enforces `.min(1)` on derived content — an empty citation is a hard validation error, not a warning.
-- **After Stage 2, a pure-code coverage pass computes `uncited = allUnitIds - unionOf(everySourceRefs)`.** No trust involved.
-- **Gap auditor.** If any units remain, a sequential Claude call (Sonnet 4.6, small input) receives the uncited passages + existing concept list and decides for each: attach to existing concept, create new concept, or justify as non-knowledge-bearing. Loops at most N times until coverage meets threshold.
+- **Every derived artifact carries derivatives and cites source units.** Every `detail` entry carries a `derivatives: Derivative[]` array (`.min(1)`) of `{ sourceRef: Slug, quote: string }` pairs — verbatim passages from the source. `sourceRefs` and `sourceQuotes` are derived from derivatives. Every `knowledge` node and `relationships` edge also carries `sourceRefs: Slug[]` (`.min(1)`).
+- **After Stage 2, a hybrid coverage check runs.** (1) **Unit-level** (primary gate): pure-code pass computes `uncited = allUnitIds - unionOf(everySourceRefs)`, 95% threshold. (2) **Word-level** (supplementary): `computeWordCoverage()` tokenizes source text and derivative quotes, matches word runs with gap tolerance, reports exact coverage percentage.
+- **Gap auditor.** If unit-level < 95%, a sequential Claude call receives uncited units and decides for each: attach to existing concept (with derivative quotes), create new concept, or justify as non-knowledge-bearing. Loops at most 3 rounds.
 
 This is why `sourceRefs` is load-bearing. Wikilinks and `tags` are not — they serve other purposes (see Design Decisions below).
 
@@ -131,8 +131,8 @@ Tier is a hint at the prompt level, not a mandate — scene gen may override bas
 
 ## Design decisions worth remembering
 
-- **Accuracy-by-citation, not accuracy-by-trust.** `sourceRefs` on every derived artifact + a pure-code coverage auditor + a gap-audit Claude call is the mechanism that delivers the "no content dropped" guarantee. Self-reported markers ("I read this") are explicitly rejected — they're unverifiable.
-- **Three distinct cross-reference primitives.** `sourceRefs` (machine-verified, load-bearing for accuracy), wikilinks (edges between nodes, load-bearing for story continuity), `tags` (free-form polish, never load-bearing). Do not conflate.
+- **Accuracy-by-derivative, not accuracy-by-trust.** `derivatives[]` on every `ConceptDetail` — verbatim quoted passages that word-match the source text. A model cannot hallucinate a passage that matches. `sourceRefs` is derived from derivatives. Unit-level coverage (95% gate) + word-level coverage (quality metric) verified by pure code. Self-reported markers ("I read this") are explicitly rejected — they're unverifiable.
+- **Four distinct cross-reference/traceability primitives.** `derivatives` (verbatim quotes, load-bearing for word-level accuracy), `sourceRefs` (unit-level citations, load-bearing for unit coverage), wikilinks/relations (edges between nodes, load-bearing for story continuity), `tags` (free-form polish, never load-bearing). Do not conflate.
 - **Obsidian markdown is the native wire format.** Every stage reads/writes frontmatter + body + `[[wikilinks]]`. Claude Code handles this format natively; the compile step parses it into Zod-validated scopes. Replaces the earlier TAB-delimited Stage 1 output.
 - **Chapter-prefixed slugs everywhere.** Always-namespace prevents collisions by construction across chapter extensions. Enforced in the `Slug` Zod schema, not at runtime.
 - **Narrative canon is frozen; arcs extend.** Split into `narrative.canon` (immutable after first generation — setting, cast, tone, aesthetic) and `narrative.arcs[]` (append per chapter). Prevents tonal drift across multi-chapter uploads.

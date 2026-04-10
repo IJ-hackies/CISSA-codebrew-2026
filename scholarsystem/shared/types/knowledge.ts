@@ -18,6 +18,11 @@ export const ConceptKind = z.enum([
   "fact",
   "principle",
   "process",
+  "framework",
+  "trade-off",
+  "distinction",
+  "paradigm",
+  "property",
 ]);
 
 // Hint to the scene generator for which model tier to use. Assigned by

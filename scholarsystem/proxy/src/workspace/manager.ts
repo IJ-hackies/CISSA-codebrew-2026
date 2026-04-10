@@ -1,5 +1,5 @@
-import { mkdir, rm, readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, rm, readdir, stat, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { config } from "../config";
 
 // Stage subfolders created inside every workspace. Each stage reads
@@ -10,6 +10,7 @@ const STAGE_DIRS = [
   "stage1-structure",
   "stage2-detail",
   "stage3-narrative",
+  "stage5-visuals",
 ] as const;
 
 export interface WorkspaceInfo {
@@ -31,13 +32,23 @@ const writeLocks = new Set<string>();
 
 /** Resolve the absolute workspace path for a galaxy. */
 export function workspaceDir(galaxyId: string): string {
-  return join(config.workspacesDir, galaxyId);
+  return resolve(config.workspacesDir, galaxyId);
 }
 
 /** Create a fresh workspace with the standard stage subfolders. */
 export async function createWorkspace(galaxyId: string): Promise<string> {
   const dir = workspaceDir(galaxyId);
   await mkdir(dir, { recursive: true });
+
+  // Create a .git marker so Claude Code treats this workspace as the
+  // project root. Without it, Claude Code walks up to the repo's .git
+  // and writes files relative to the repo root instead of the workspace.
+  const gitDir = join(dir, ".git");
+  await mkdir(gitDir, { recursive: true });
+  await writeFile(join(gitDir, "HEAD"), "ref: refs/heads/main\n");
+  // Minimal git init so Claude Code recognizes this as a project root.
+  await mkdir(join(gitDir, "refs", "heads"), { recursive: true });
+  await mkdir(join(gitDir, "objects"), { recursive: true });
 
   await Promise.all(
     STAGE_DIRS.map((sub) => mkdir(join(dir, sub), { recursive: true })),
