@@ -201,6 +201,186 @@ Now read the source material in \`sources/${chapterId}/\` and create the detail 
 // Backward compat alias.
 export const buildDetailPrompt = buildTopicDetailPrompt;
 
+// ─── Single-concept prompt (for parallel sub-session fan-out) ────
+
+export interface BuildConceptDetailPromptOptions {
+  /** The concept to extract detail for. */
+  concept: {
+    id: string;
+    title: string;
+    kind: string;
+    brief: string;
+    sourceRefs: string[];
+  };
+  /** Chapter ID for folder pathing. */
+  chapterId: string;
+  /** Neighboring concept titles for wikilink context. */
+  neighbors: { id: string; title: string }[];
+}
+
+/**
+ * Build a focused prompt for a single concept. The agent creates
+ * exactly ONE file: `stage2-detail/<conceptId>.md`.
+ *
+ * Source unit files are pre-pushed into the sub-session workspace
+ * under `sources/<chapterId>/`, so the prompt just references them.
+ */
+export function buildConceptDetailPrompt(
+  options: BuildConceptDetailPromptOptions,
+): string {
+  const { concept, chapterId, neighbors } = options;
+
+  const neighborList = neighbors.length > 0
+    ? neighbors.map((n) => `  - [[${n.id}]] "${n.title}"`).join("\n")
+    : "  (none)";
+
+  return `You are an educational content extractor. Your task is to produce ONE detail file for ONE concept by reading the source material.
+
+## The concept
+
+- **ID:** ${concept.id}
+- **Title:** ${concept.title}
+- **Kind:** ${concept.kind}
+- **Brief:** ${concept.brief}
+- **Source units:** ${concept.sourceRefs.join(", ")}
+
+## Related concepts (for wikilinks only — do NOT create files for these)
+
+${neighborList}
+
+## Output
+
+Create exactly ONE file: \`stage2-detail/${concept.id}.md\`
+
+\`\`\`markdown
+---
+conceptId: ${concept.id}
+chapter: ${chapterId}
+fullDefinition: >
+  Complete explanation in the source's own terms, 1-4 sentences.
+formulas:
+  - "E = mc^2"
+workedExamples:
+  - "Step 1: ... Step 2: ..."
+edgeCases:
+  - "Does not apply when..."
+mnemonics:
+  - "ROY G BIV"
+emphasisMarkers:
+  - "The lecturer stressed this"
+sourceRefs: [${concept.sourceRefs.join(", ")}]
+---
+
+<200-300 word body: self-contained explanation of the concept. Should be
+understandable without reading other concepts. Use technical precision.
+Reference related concepts via [[wikilinks]] but don't assume context.>
+
+# Relations
+
+from:: [[prerequisite-concept]]
+to:: [[dependent-concept]]
+related:: [[similar-concept]]
+contrasts:: [[opposing-concept]]
+
+# Derivatives
+
+## ${concept.sourceRefs[0] ?? `${chapterId}-s-NNNN`}
+
+> "Exact verbatim quote from the source text."
+\`\`\`
+
+## Rules
+
+1. **Create exactly ONE file.** \`stage2-detail/${concept.id}.md\`. Nothing else.
+2. **200-300 words** in the body. More is better than less. Do not summarize.
+3. **Derivatives are verbatim.** Exact quotes from the source. No paraphrasing, no ellipsis.
+4. **Every source unit in sourceRefs must have at least one derivative quote.**
+5. **sourceRefs in frontmatter must match the source units in # Derivatives.**
+6. **Do NOT fabricate.** Empty arrays for fields the source doesn't cover.
+7. **Self-contained.** The body should be understandable without reading other concepts.
+
+## Relation types allowed
+
+\`from::\` (prerequisite), \`to::\` (leads to), \`related::\`, \`contrasts::\`, \`example-of::\`, \`cause-effect::\`, \`similar::\`, \`parent-child::\`
+
+Now read the source material in \`sources/${chapterId}/\` and create the file.`;
+}
+
+/**
+ * Build a focused prompt for _structure.md and _etc.md files.
+ * Handles structural/transitional and non-knowledge source units
+ * that need derivative coverage but don't map to concepts.
+ */
+export function buildAuxiliaryDetailPrompt(options: {
+  chapterId: string;
+  structureUnitIds: string[];
+  etcUnitIds: string[];
+}): string {
+  const { chapterId, structureUnitIds, etcUnitIds } = options;
+
+  const parts: string[] = [];
+
+  if (structureUnitIds.length > 0) {
+    parts.push(`### \`stage2-detail/_structure.md\`
+
+This file covers structural/transitional source units (intros, transitions, recaps).
+Source units: ${structureUnitIds.join(", ")}
+
+\`\`\`markdown
+---
+type: structure
+chapter: ${chapterId}
+---
+
+# Derivatives
+
+## ${structureUnitIds[0]}
+
+> "Verbatim quote from the structural content."
+\`\`\``);
+  }
+
+  if (etcUnitIds.length > 0) {
+    parts.push(`### \`stage2-detail/_etc.md\`
+
+This file covers non-knowledge source units with justifications.
+Source units: ${etcUnitIds.join(", ")}
+
+\`\`\`markdown
+---
+type: etc
+chapter: ${chapterId}
+---
+
+# Non-Knowledge Content
+
+## ${etcUnitIds[0]}
+Reason: <why this is not learnable content>
+
+> "Verbatim quote proving this is non-knowledge."
+\`\`\``);
+  }
+
+  return `You are an educational content extractor. Your task is to produce derivative coverage for source units that don't map to concepts.
+
+## Source units to cover
+
+${structureUnitIds.length > 0 ? `**Structural:** ${structureUnitIds.join(", ")}` : ""}
+${etcUnitIds.length > 0 ? `**Non-knowledge:** ${etcUnitIds.join(", ")}` : ""}
+
+## Output
+
+${parts.join("\n\n")}
+
+## Rules
+
+1. **Create only the file(s) listed above.** Nothing else.
+2. **Every listed source unit must have at least one verbatim derivative quote.**
+3. **Derivatives are verbatim.** Exact quotes, no paraphrasing.
+
+Now read the source material in \`sources/${chapterId}/\` and create the file(s).`;
+}
+
 /**
  * Render the Stage 1 knowledge outline as an indented listing for the prompt.
  */

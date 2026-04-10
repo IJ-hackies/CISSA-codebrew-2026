@@ -154,6 +154,157 @@ ${bodyList}
 Now create the visual files. One \`.md\` file per body in \`stage5-visuals/\`.`;
 }
 
+// ─── Single-body prompt (for parallel sub-session fan-out) ────────
+
+export interface SingleBodyVisualInput {
+  /** The body to theme. */
+  body: Body;
+  /** Narrative canon aesthetic direction. */
+  canon: NarrativeCanon;
+  /** Knowledge tree for semantic context. */
+  knowledge: Knowledge;
+  /** Pre-computed biome (for moons/asteroids). */
+  biome?: string;
+  /** Pre-computed character role (for moons/asteroids). */
+  character?: string;
+  /** Parent system's palette for coherence (if available). */
+  systemPalette?: { primary: string; secondary: string; accent: string };
+}
+
+/**
+ * Build a focused prompt for a single body's visual params.
+ * The agent creates exactly ONE file: `stage5-visuals/<bodyId>.md`.
+ */
+export function buildSingleBodyVisualPrompt(input: SingleBodyVisualInput): string {
+  const { body, canon, knowledge, biome, character, systemPalette } = input;
+
+  const ref = "knowledgeRef" in body ? body.knowledgeRef : null;
+  let semanticContext = "";
+
+  if (body.kind === "system" && ref) {
+    const topic = knowledge.topics.find((t) => t.id === ref);
+    if (topic) semanticContext = `Topic: "${topic.title}" — ${topic.summary.slice(0, 150)}`;
+  } else if (body.kind === "planet" && ref) {
+    const sub = knowledge.subtopics.find((s) => s.id === ref);
+    if (sub) semanticContext = `Subtopic: "${sub.title}" — ${sub.summary.slice(0, 150)}`;
+  } else if ((body.kind === "moon" || body.kind === "asteroid") && ref) {
+    const concept = knowledge.concepts.find((c) => c.id === ref);
+    if (concept) semanticContext = `Concept: "${concept.title}" (${concept.kind}) — ${concept.brief.slice(0, 150)}`;
+  }
+
+  const paletteHint = systemPalette
+    ? `\n\n## Parent system palette (for coherence)\n- Primary: ${systemPalette.primary}\n- Secondary: ${systemPalette.secondary}\n- Accent: ${systemPalette.accent}\n\nYour palette should relate to these colors (same family, varied saturation/lightness).`
+    : "";
+
+  const biomeCharLine = biome || character
+    ? `\n- **Biome:** ${biome ?? "n/a"} (use this EXACTLY in the frontmatter)\n- **Character:** ${character ?? "n/a"} (use this EXACTLY in the frontmatter)`
+    : "";
+
+  const templateMap: Record<string, string> = {
+    galaxy: `---
+bodyId: ${body.id}
+kind: galaxy
+palette:
+  primary: "<hex>"
+  secondary: "<hex>"
+  accent: "<hex>"
+  atmosphere: "<rgba>"
+armStyle: <spiral|barred|elliptical|irregular>
+starDensity: <0.0-1.0>
+---`,
+    system: `---
+bodyId: ${body.id}
+kind: system
+palette:
+  primary: "<hex>"
+  secondary: "<hex>"
+  accent: "<hex>"
+  atmosphere: "<rgba>"
+starGlow: <0.0-1.0>
+orbitRingVisible: <true|false>
+---`,
+    planet: `---
+bodyId: ${body.id}
+kind: planet
+palette:
+  primary: "<hex>"
+  secondary: "<hex>"
+  accent: "<hex>"
+  atmosphere: "<rgba>"
+terrain: <crystalline|rocky|oceanic|gaseous|molten|frozen|organic|desert|metallic>
+atmosphere: <thin|dense-haze|stormy|clear|toxic|aurora|none>
+lighting: <bioluminescent|sunlit|twilight|eclipsed|nebula-lit|starlight>
+features:
+  - "<free-form flourish tag>"
+mood: "<one-phrase mood description>"
+ring: <true|false>
+---`,
+    moon: `---
+bodyId: ${body.id}
+kind: moon
+palette:
+  primary: "<hex>"
+  secondary: "<hex>"
+  accent: "<hex>"
+  atmosphere: "<rgba>"
+terrain: <crystalline|rocky|oceanic|gaseous|molten|frozen|organic|desert|metallic>
+cratered: <true|false>
+glow: <true|false>
+biome: ${biome ?? "neon-city"}
+character: ${character ?? "sage"}
+---`,
+    asteroid: `---
+bodyId: ${body.id}
+kind: asteroid
+palette:
+  primary: "<hex>"
+  secondary: "<hex>"
+  accent: "<hex>"
+  atmosphere: "<rgba>"
+shape: <angular|elongated|clustered>
+biome: ${biome ?? "floating-islands"}
+character: ${character ?? "trickster"}
+---`,
+  };
+
+  const template = templateMap[body.kind] ?? templateMap["moon"];
+
+  return `You are a visual designer for an educational space-exploration game. Generate visual parameters for ONE cosmic body.
+
+## Aesthetic direction
+
+- **Palette direction:** ${canon.aesthetic.paletteDirection}
+- **Atmosphere direction:** ${canon.aesthetic.atmosphereDirection}
+- **Motif keywords:** ${canon.aesthetic.motifKeywords.join(", ")}
+- **Tone:** ${canon.tone.primary}${canon.tone.secondary ? ` / ${canon.tone.secondary}` : ""} (${canon.tone.genre})
+- **Setting:** ${canon.setting}
+
+## The body
+
+- **ID:** ${body.id}
+- **Kind:** ${body.kind}
+${semanticContext ? `- ${semanticContext}` : ""}${biomeCharLine}${paletteHint}
+
+## Output
+
+Create exactly ONE file: \`stage5-visuals/${body.id}.md\`
+
+The file has ONLY YAML frontmatter — no body text.
+
+\`\`\`yaml
+${template}
+\`\`\`
+
+## Rules
+
+1. **Create exactly ONE file.** \`stage5-visuals/${body.id}.md\`. Nothing else.
+2. **Atmosphere rgba** must have alpha < 1.0 (e.g. \`rgba(100, 50, 200, 0.3)\`).
+3. **Palette coherence.** Follow the aesthetic direction. The body should feel like it belongs to the galaxy.
+${biome ? `4. **biome and character fields must be exactly as listed above.** Do not change them.` : ""}
+
+Now create the file.`;
+}
+
 function renderBodyList(
   bodies: Body[],
   knowledge: Knowledge,

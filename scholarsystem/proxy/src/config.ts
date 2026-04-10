@@ -12,8 +12,11 @@ export const config = {
   /** Root directory for per-galaxy workspaces. */
   workspacesDir: process.env.WORKSPACES_DIR ?? "./workspaces",
 
-  /** Max concurrent Claude Code processes across all sessions. */
-  maxConcurrency: Number(process.env.MAX_CONCURRENCY ?? 4),
+  /** Max concurrent Claude Code processes across all sessions.
+   *  Raised from 4 to support parallel sub-session fan-out in
+   *  Stage 2 (detail) and Stage 5 (visuals). Each sub-session is
+   *  lightweight (1 file output), so higher concurrency is safe. */
+  maxConcurrency: Number(process.env.MAX_CONCURRENCY ?? 10),
 
   /** Idle workspace TTL in milliseconds (default 30 min). */
   idleTtlMs: Number(process.env.IDLE_TTL_MS ?? 30 * 60 * 1000),

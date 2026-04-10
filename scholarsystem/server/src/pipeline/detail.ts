@@ -1,35 +1,45 @@
-// Stage 2: Detail extraction (proxy-based, dispatch-plan-driven).
+// Stage 2: Detail extraction (parallel sub-session fan-out).
 //
-// Receives a DispatchPlan from the Stage 1 skeleton pass and fans out
-// parallel Claude Code agents — one per topic. Each agent receives only
-// its topic's source units and the full skeleton for cross-reference.
+// Each concept gets its own isolated proxy sub-session with a focused
+// Claude Code agent that creates exactly ONE detail file. Sub-sessions
+// run in parallel, bounded by the proxy's worker pool concurrency.
 //
-// Key changes from v1:
-//   - Dispatch driven by DispatchPlan (source units scoped per topic)
-//   - Agents produce 200-300 word bodies + verbatim derivative quotes
-//   - Structure and ETC source units distributed to adjacent topic agents
-//   - compileDetail now extracts derivatives for word-level coverage
+// This replaces the old sequential-per-topic model where one agent
+// created many files per run (slow, fragile, hit output limits).
 //
-// ─── Failure semantics ────────────────────────────────────────────────
+// ─── Execution model ────────────────────────────────────────────
 //
-// Best-effort per topic. If one agent fails, its concepts will have
-// skeleton data (brief, kind, sourceRefs) but no detail (no body, no
-// derivatives). The galaxy is still renderable. The coverage audit will
-// flag the uncovered source units.
+//   1. Build a SubSessionTask per concept (scoped source units + prompt)
+//   2. Build one auxiliary task for _structure.md / _etc.md if needed
+//   3. fanOutSubSessions() runs them all in parallel
+//   4. Merge output files from all sub-sessions
+//   5. Compile merged files into Detail scope on the blob
+//   6. Retry any missing concepts with fresh sub-sessions
+//
+// ─── Failure semantics ────────────────────────────────────────────
+//
+// Best-effort per concept. If one sub-session fails, that concept
+// will have skeleton data (brief, kind, sourceRefs) but no detail.
+// The galaxy is still renderable. The coverage audit will flag
+// uncovered source units.
 
-import type { Galaxy, Knowledge, ConceptDetail } from "@scholarsystem/shared";
+import type { Galaxy, Knowledge, SourceUnit } from "@scholarsystem/shared";
 import { stageStart, stageDone, stageError } from "../lib/blob";
-import { pushFiles, runStage, compileFiles } from "../lib/proxy-client";
-import { buildTopicDetailPrompt } from "../prompts/detail";
+import {
+  pushFiles,
+  fanOutSubSessions,
+  mergeSubSessionFiles,
+  type SubSessionTask,
+} from "../lib/proxy-client";
+import {
+  buildConceptDetailPrompt,
+  buildAuxiliaryDetailPrompt,
+} from "../prompts/detail";
 import { compileDetail, type DispatchPlan } from "./compile";
 
 /**
- * Runs Stage 2 against the proxy workspace using the dispatch plan from
- * the skeleton stage. Mutates the blob in place: writes `detail` keyed
- * by concept id. Returns the same galaxy for chaining.
- *
- * If no dispatchPlan is provided, falls back to the simple topic-based
- * chunking (backward compat for tests or manual runs).
+ * Runs Stage 2 via parallel sub-sessions — one per concept.
+ * Mutates the blob in place: writes `detail` keyed by concept id.
  */
 export async function runDetailStage(
   galaxy: Galaxy,
@@ -45,130 +55,201 @@ export async function runDetailStage(
     const chapter = galaxy.source.chapters[galaxy.source.chapters.length - 1];
     if (!chapter) throw new Error("detail: no source chapters");
 
-    // Build chunks from dispatch plan or fall back to simple planning.
-    const chunks = dispatchPlan
-      ? buildChunksFromPlan(dispatchPlan, galaxy.knowledge)
-      : buildFallbackChunks(galaxy.knowledge, chapter.units.map((u) => u.id));
+    const knowledge = galaxy.knowledge;
+    const concepts = knowledge.concepts;
 
-    if (chunks.length === 0) {
+    if (concepts.length === 0) {
       console.warn("[detail] no concepts in knowledge; stage is a no-op");
       stageDone(galaxy, "detail");
       return galaxy;
     }
 
-    // ── Validate dispatch plan completeness ──
-    const allChunkedIds = new Set(chunks.flatMap((c) => c.conceptIds));
-    const allKnownIds = galaxy.knowledge.concepts.map((c) => c.id);
-    const orphans = allKnownIds.filter((id) => !allChunkedIds.has(id));
-    if (orphans.length > 0) {
-      console.warn(
-        `[detail] ${orphans.length} orphaned concept(s) not in any chunk: ${orphans.join(", ")}`,
-      );
-      // Add orphans to the chunk whose sourceUnitIds best overlap their sourceRefs.
-      for (const orphanId of orphans) {
-        const concept = galaxy.knowledge!.concepts.find((c) => c.id === orphanId);
-        if (!concept) continue;
-        const orphanRefs = new Set(concept.sourceRefs);
-        let bestChunk = chunks[0];
-        let bestOverlap = 0;
-        for (const chunk of chunks) {
-          const overlap = chunk.sourceUnitIds.filter((u) => orphanRefs.has(u)).length;
-          if (overlap > bestOverlap) {
-            bestOverlap = overlap;
-            bestChunk = chunk;
-          }
+    // Build a lookup of source units by ID for scoped pushing.
+    const unitById = new Map<string, SourceUnit>(
+      chapter.units.map((u) => [u.id, u]),
+    );
+
+    // Build neighbor list for wikilink context (all concepts minus self).
+    const allNeighbors = concepts.map((c) => ({ id: c.id, title: c.title }));
+
+    // ── Build per-concept sub-session tasks ──
+
+    const tasks: SubSessionTask[] = [];
+
+    for (const concept of concepts) {
+      // Determine which source units this concept needs.
+      const sourceUnitIds = concept.sourceRefs;
+
+      // Build the scoped files: only the source units this concept references.
+      const files: Record<string, string> = {};
+      for (const unitId of sourceUnitIds) {
+        const unit = unitById.get(unitId);
+        if (unit) {
+          files[`sources/${chapter.id}/${unit.id}.md`] = unit.text;
         }
-        bestChunk.conceptIds.push(orphanId);
       }
-      console.log(`[detail] orphans distributed into existing chunks`);
+
+      if (Object.keys(files).length === 0) {
+        console.warn(
+          `[detail] concept ${concept.id} has no resolvable source units, skipping`,
+        );
+        continue;
+      }
+
+      const neighbors = allNeighbors.filter((n) => n.id !== concept.id);
+
+      const prompt = buildConceptDetailPrompt({
+        concept: {
+          id: concept.id,
+          title: concept.title,
+          kind: concept.kind,
+          brief: concept.brief,
+          sourceRefs: [...concept.sourceRefs],
+        },
+        chapterId: chapter.id,
+        neighbors,
+      });
+
+      tasks.push({
+        sessionId: `${galaxy.meta.id}--d--${concept.id}`,
+        files,
+        prompt,
+        label: concept.id,
+      });
+    }
+
+    // ── Build auxiliary task for _structure.md / _etc.md ──
+
+    const structureUnitIds = dispatchPlan?.structureUnitIds ?? [];
+    const etcUnitIds = dispatchPlan?.etcUnitIds ?? [];
+
+    if (structureUnitIds.length > 0 || etcUnitIds.length > 0) {
+      const auxFiles: Record<string, string> = {};
+      for (const unitId of [...structureUnitIds, ...etcUnitIds]) {
+        const unit = unitById.get(unitId);
+        if (unit) {
+          auxFiles[`sources/${chapter.id}/${unit.id}.md`] = unit.text;
+        }
+      }
+
+      if (Object.keys(auxFiles).length > 0) {
+        const auxPrompt = buildAuxiliaryDetailPrompt({
+          chapterId: chapter.id,
+          structureUnitIds,
+          etcUnitIds,
+        });
+
+        tasks.push({
+          sessionId: `${galaxy.meta.id}--d--aux`,
+          files: auxFiles,
+          prompt: auxPrompt,
+          label: "_aux",
+        });
+      }
     }
 
     console.log(
-      `[detail] dispatching ${chunks.length} sequential chunk(s): ${chunks.map((c) => `${c.label}(${c.conceptIds.length}c, ${c.sourceUnitIds.length}u)`).join(", ")}`,
+      `[detail] dispatching ${tasks.length} parallel sub-sessions ` +
+      `(${concepts.length} concepts + ${structureUnitIds.length > 0 || etcUnitIds.length > 0 ? "1 aux" : "0 aux"})`,
     );
 
-    // Run chunks SEQUENTIALLY — the proxy enforces single-writer per
-    // galaxy session, so concurrent runs against the same session fail
-    // with 409 "session already has an active run". True parallelism
-    // requires separate session IDs per topic (future optimization).
+    // ── Fan out ──
+
     const started = Date.now();
-    let anyChunkSucceeded = false;
+    const results = await fanOutSubSessions(tasks);
 
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      try {
-        await runOneChunk(galaxy, galaxy.knowledge!, chunk, chapter.id);
-        anyChunkSucceeded = true;
-        console.log(
-          `[detail] chunk '${chunk.label}' completed (${chunk.conceptIds.length} concepts)`,
-        );
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : String(err);
-        console.warn(
-          `[detail] chunk '${chunk.label}' failed (${chunk.conceptIds.length} concepts will be missing): ${message}`,
-        );
-      }
+    const succeeded = results.filter((r) => r.ok).length;
+    const failed = results.filter((r) => !r.ok).length;
+    console.log(
+      `[detail] fan-out complete: ${succeeded} succeeded, ${failed} failed (${Date.now() - started}ms)`,
+    );
+
+    // ── Merge, push back to main workspace, and compile ──
+
+    const mergedFiles = mergeSubSessionFiles(results, "stage2-detail/");
+
+    // Push merged files into the main galaxy workspace so the
+    // stage2-detail/ folder is populated for downstream stages
+    // and the folder-to-folder chain stays inspectable.
+    if (Object.keys(mergedFiles).length > 0) {
+      await pushFiles(galaxy.meta.id, mergedFiles);
+      console.log(
+        `[detail] pushed ${Object.keys(mergedFiles).length} files back to main workspace`,
+      );
     }
 
-    const elapsed = Date.now() - started;
+    const { detail } = compileDetail(mergedFiles);
 
-    if (!anyChunkSucceeded) {
-      throw new Error("all detail chunks failed — see warnings above");
-    }
-
-    // Compile all stage2-detail/ files from the workspace into Detail.
-    const files = await compileFiles(galaxy.meta.id);
-    const { detail } = compileDetail(files);
-
-    // Log coverage.
-    const knownConceptIds = new Set(galaxy.knowledge.concepts.map((c) => c.id));
+    // Check coverage.
+    const knownConceptIds = new Set(concepts.map((c) => c.id));
     let missing = [...knownConceptIds].filter((id) => !(id in detail));
+
     if (missing.length > 0) {
       console.warn(
-        `[detail] ${missing.length}/${knownConceptIds.size} concepts missing detail after main pass: ${missing.slice(0, 10).join(", ")}${missing.length > 10 ? "…" : ""}`,
+        `[detail] ${missing.length}/${knownConceptIds.size} concepts missing after main pass: ` +
+        `${missing.slice(0, 10).join(", ")}${missing.length > 10 ? "…" : ""}`,
       );
     }
 
     // ── Retry pass for missing concepts ──
-    // Run up to 3 rounds of single-concept retries.
-    const MAX_RETRY_ROUNDS = 3;
+
+    const MAX_RETRY_ROUNDS = 2;
     for (let round = 0; round < MAX_RETRY_ROUNDS && missing.length > 0; round++) {
       console.log(
         `[detail] retry round ${round + 1}: ${missing.length} concept(s) to fill`,
       );
 
-      // Build a small chunk per missing concept with its own sourceRefs.
+      const retryTasks: SubSessionTask[] = [];
       for (const missingId of missing) {
-        const concept = galaxy.knowledge!.concepts.find((c) => c.id === missingId);
+        const concept = concepts.find((c) => c.id === missingId);
         if (!concept) continue;
 
-        const retryChunk: DetailChunk = {
-          label: `retry:${missingId}`,
-          conceptIds: [missingId],
-          sourceUnitIds: [...concept.sourceRefs],
-          structureUnitIds: [],
-          etcUnitIds: [],
-        };
-
-        try {
-          await runOneChunk(galaxy, galaxy.knowledge!, retryChunk, chapter.id);
-          console.log(`[detail] retry succeeded for ${missingId}`);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.warn(`[detail] retry failed for ${missingId}: ${msg}`);
+        const files: Record<string, string> = {};
+        for (const unitId of concept.sourceRefs) {
+          const unit = unitById.get(unitId);
+          if (unit) {
+            files[`sources/${chapter.id}/${unit.id}.md`] = unit.text;
+          }
         }
+
+        if (Object.keys(files).length === 0) continue;
+
+        const neighbors = allNeighbors.filter((n) => n.id !== concept.id);
+
+        retryTasks.push({
+          sessionId: `${galaxy.meta.id}--dr${round}--${concept.id}`,
+          files,
+          prompt: buildConceptDetailPrompt({
+            concept: {
+              id: concept.id,
+              title: concept.title,
+              kind: concept.kind,
+              brief: concept.brief,
+              sourceRefs: [...concept.sourceRefs],
+            },
+            chapterId: chapter.id,
+            neighbors,
+          }),
+          label: `retry:${concept.id}`,
+        });
       }
 
-      // Re-compile and recheck.
-      const retryFiles = await compileFiles(galaxy.meta.id);
+      const retryResults = await fanOutSubSessions(retryTasks);
+      const retryFiles = mergeSubSessionFiles(retryResults, "stage2-detail/");
+
+      // Push retry files back to main workspace too.
+      if (Object.keys(retryFiles).length > 0) {
+        await pushFiles(galaxy.meta.id, retryFiles);
+      }
+
       const retryCompiled = compileDetail(retryFiles);
-      // Merge retry results into detail.
+
       for (const [id, entry] of Object.entries(retryCompiled.detail)) {
         if (!(id in detail)) {
           detail[id] = entry;
         }
       }
+
       missing = [...knownConceptIds].filter((id) => !(id in detail));
       if (missing.length === 0) {
         console.log(`[detail] retry round ${round + 1} closed all gaps`);
@@ -193,140 +274,5 @@ export async function runDetailStage(
     console.warn(`[detail] stage failed, galaxy remains renderable: ${message}`);
     stageError(galaxy, "detail", message);
     return galaxy;
-  }
-}
-
-// ───────── Chunk types and planning ─────────
-
-interface DetailChunk {
-  label: string;
-  conceptIds: string[];
-  sourceUnitIds: string[];
-  structureUnitIds: string[];
-  etcUnitIds: string[];
-}
-
-/**
- * Build chunks from the skeleton's DispatchPlan.
- * Each topic becomes one chunk with its assigned source units.
- * Structure/ETC units are distributed to the nearest topic.
- */
-function buildChunksFromPlan(
-  plan: DispatchPlan,
-  knowledge: Knowledge,
-): DetailChunk[] {
-  const chunks: DetailChunk[] = [];
-
-  for (const topicChunk of plan.topicChunks) {
-    // Merge primary and shared source units.
-    const allSourceUnits = new Set([
-      ...topicChunk.sourceUnitIds,
-      ...topicChunk.sharedSourceUnitIds,
-    ]);
-
-    chunks.push({
-      label: `topic:${topicChunk.topicId}`,
-      conceptIds: topicChunk.conceptIds,
-      sourceUnitIds: [...allSourceUnits],
-      structureUnitIds: [], // distributed below
-      etcUnitIds: [],       // distributed below
-    });
-  }
-
-  // Distribute structure/ETC units to the first topic chunk
-  // (simple heuristic — these are small and just need derivatives).
-  if (chunks.length > 0) {
-    chunks[0].structureUnitIds = plan.structureUnitIds;
-    chunks[0].etcUnitIds = plan.etcUnitIds;
-  }
-
-  // Handle loose concepts as their own chunk.
-  if (knowledge.looseConceptIds.length > 0) {
-    const looseSourceRefs = new Set<string>();
-    for (const cid of knowledge.looseConceptIds) {
-      const concept = knowledge.concepts.find((c) => c.id === cid);
-      if (concept) {
-        for (const ref of concept.sourceRefs) looseSourceRefs.add(ref);
-      }
-    }
-    chunks.push({
-      label: "loose",
-      conceptIds: [...knowledge.looseConceptIds],
-      sourceUnitIds: [...looseSourceRefs],
-      structureUnitIds: [],
-      etcUnitIds: [],
-    });
-  }
-
-  return chunks;
-}
-
-/**
- * Fallback chunking when no dispatch plan is available.
- * Groups concepts by topic and uses all source units.
- */
-function buildFallbackChunks(
-  knowledge: Knowledge,
-  allSourceUnitIds: string[],
-): DetailChunk[] {
-  const subtopicsById = new Map(knowledge.subtopics.map((s) => [s.id, s]));
-  const chunks: DetailChunk[] = [];
-
-  for (const topic of knowledge.topics) {
-    const ids: string[] = [];
-    for (const sid of topic.subtopicIds) {
-      const sub = subtopicsById.get(sid);
-      if (!sub) continue;
-      ids.push(...sub.conceptIds);
-    }
-    if (ids.length > 0) {
-      chunks.push({
-        label: `topic:${topic.id}`,
-        conceptIds: ids,
-        sourceUnitIds: allSourceUnitIds, // all units for fallback
-        structureUnitIds: [],
-        etcUnitIds: [],
-      });
-    }
-  }
-
-  if (knowledge.looseConceptIds.length > 0) {
-    chunks.push({
-      label: "loose",
-      conceptIds: [...knowledge.looseConceptIds],
-      sourceUnitIds: allSourceUnitIds,
-      structureUnitIds: [],
-      etcUnitIds: [],
-    });
-  }
-
-  return chunks;
-}
-
-// ───────── Single-chunk execution ─────────
-
-async function runOneChunk(
-  galaxy: Galaxy,
-  knowledge: Knowledge,
-  chunk: DetailChunk,
-  chapterId: string,
-): Promise<void> {
-  const prompt = buildTopicDetailPrompt(knowledge, {
-    inScopeConceptIds: chunk.conceptIds,
-    chapterId,
-    sourceUnitIds: chunk.sourceUnitIds,
-    structureUnitIds: chunk.structureUnitIds.length > 0 ? chunk.structureUnitIds : undefined,
-    etcUnitIds: chunk.etcUnitIds.length > 0 ? chunk.etcUnitIds : undefined,
-  });
-
-  const result = await runStage({
-    galaxyId: galaxy.meta.id,
-    prompt,
-  });
-
-  if (!result.ok) {
-    throw new Error(
-      `chunk '${chunk.label}' claude exited ${result.exitCode}`,
-    );
   }
 }
