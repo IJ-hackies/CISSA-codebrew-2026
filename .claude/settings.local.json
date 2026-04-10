@@ -16,7 +16,14 @@
       "Bash(bun add:*)",
       "Bash(ls node_modules/mammoth/*.d.ts node_modules/mammoth/lib/*.d.ts)",
       "Bash(bunx vue-tsc:*)",
-      "Bash(bun --bun -e \"import\\('./src/pipeline/parsing/extract/pdf.ts'\\).then\\(m => console.log\\('loaded', typeof m.extractPdf\\)\\)\")"
+      "Bash(bun --bun -e \"import\\('./src/pipeline/parsing/extract/pdf.ts'\\).then\\(m => console.log\\('loaded', typeof m.extractPdf\\)\\)\")",
+      "Bash(bun run:*)",
+      "WebSearch",
+      "Bash(xargs grep:*)",
+      "WebFetch(domain:amanhimself.dev)",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(bun -e \"import { renderPageAsImage, getDocumentProxy } from 'unpdf'; console.log\\('unpdf works:', typeof renderPageAsImage\\)\")",
+      "Bash(bun -e \"import { extractPdf } from './src/pipeline/parsing/extract/pdf'; console.log\\('pdf extractor loads:', typeof extractPdf\\)\")"
     ]
   }
 }

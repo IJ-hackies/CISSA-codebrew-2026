@@ -31,6 +31,8 @@ sessionRoutes.post("/:id/files", async (c) => {
   const galaxyId = c.req.param("id");
   const body = await c.req.json<{
     files?: Record<string, string>;
+    /** Base64-encoded binary files (e.g. PNG page images). */
+    binaryFiles?: Record<string, string>;
     blob?: Galaxy;
   }>();
 
@@ -44,12 +46,22 @@ sessionRoutes.post("/:id/files", async (c) => {
   touchWorkspace(galaxyId);
   const dir = workspaceDir(galaxyId);
 
-  // Write files into the workspace
+  // Write text files into the workspace
   if (body.files) {
     const writes = Object.entries(body.files).map(async ([relPath, content]) => {
       const absPath = join(dir, relPath);
       await mkdir(join(absPath, ".."), { recursive: true });
       await writeFile(absPath, content, "utf-8");
+    });
+    await Promise.all(writes);
+  }
+
+  // Write binary files (base64-encoded) into the workspace
+  if (body.binaryFiles) {
+    const writes = Object.entries(body.binaryFiles).map(async ([relPath, b64]) => {
+      const absPath = join(dir, relPath);
+      await mkdir(join(absPath, ".."), { recursive: true });
+      await writeFile(absPath, Buffer.from(b64, "base64"));
     });
     await Promise.all(writes);
   }

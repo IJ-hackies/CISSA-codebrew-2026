@@ -1,40 +1,68 @@
-// PDF extractor.
+// PDF extractor — renders pages to PNG images for vision-based processing.
 //
-// Uses `pdf-parse` v2's class-based API — we instantiate `PDFParse` with
-// the raw buffer and call `.getText()` to get the concatenated per-page
-// text. (v1's smoke-test-on-import issue and the `lib/pdf-parse.js`
-// workaround no longer apply: v2 is a clean ESM rewrite.)
+// PDFs with rendered math (LaTeX), diagrams, or complex layouts lose
+// critical content when extracted as text-only. This extractor:
+//   1. Extracts a basic text layer as fallback via pdfjs
+//   2. Renders each page as a PNG image
 //
-// Stage 1 is tolerant of messy whitespace, so we don't re-flow.
+// The page images are returned alongside the text. The pipeline pushes
+// them into the proxy workspace so Claude Code's Read tool (which
+// supports vision) can see the full visual content during Stage 1.
+// No metered API calls — the vision happens inside the Claude Code
+// session that's already running.
 
 import type { Extracted } from "./types";
-import { PDFParse } from "pdf-parse";
+import { getDocumentProxy, renderPageAsImage } from "unpdf";
 
-export async function extractPdf(buf: Buffer, _filename: string): Promise<Extracted> {
-  // PDFParse expects a Uint8Array; a Node Buffer IS one, but we pass
-  // through a fresh view so no `.subarray` sharing surprises occur.
+export interface PdfExtracted extends Extracted {
+  /** PNG images of each page, for vision-based processing in Claude Code. */
+  pageImages: { page: number; png: Buffer }[];
+}
+
+export async function extractPdf(buf: Buffer, _filename: string): Promise<PdfExtracted> {
   const data = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-  const parser = new PDFParse({ data });
-  try {
-    const result = await parser.getText();
-    const text = (result.text ?? "").trim();
+  const doc = await getDocumentProxy(data);
+  const pageCount = doc.numPages;
 
-    // Pull a title from the PDF's /Info metadata if present — purely a
-    // nicety; the pipeline will fall back to deriving from the first
-    // line when absent.
-    let title: string | undefined;
+  // Render pages to PNG images.
+  const pageImages: { page: number; png: Buffer }[] = [];
+  for (let i = 1; i <= pageCount; i++) {
     try {
-      const info = await parser.getInfo();
-      const metaTitle = (info as unknown as { info?: { Title?: string } }).info?.Title;
-      if (typeof metaTitle === "string" && metaTitle.trim()) {
-        title = metaTitle.trim().slice(0, 80);
+      const result = await renderPageAsImage(doc, i, { scale: 2 });
+      pageImages.push({ page: i, png: Buffer.from(result) });
+    } catch {
+      console.warn(`[pdf] failed to render page ${i}, skipping`);
+    }
+  }
+
+  // Also extract text layer as fallback / supplement.
+  let textContent = "";
+  for (let i = 1; i <= pageCount; i++) {
+    try {
+      const page = await doc.getPage(i);
+      const content = await page.getTextContent();
+      const pageText = content.items
+        .filter((item: unknown): item is { str: string } => "str" in (item as object))
+        .map((item: { str: string }) => item.str)
+        .join(" ");
+      if (pageText.trim()) {
+        textContent += (textContent ? "\n\n" : "") + pageText;
       }
     } catch {
-      // Metadata is optional — extraction succeeds without it.
+      console.warn(`[pdf] failed to extract text from page ${i}`);
     }
-
-    return { text, title };
-  } finally {
-    await parser.destroy().catch(() => {});
   }
+
+  const title = deriveTitle(textContent);
+  return { text: textContent.trim(), title, pageImages };
+}
+
+function deriveTitle(text: string): string | undefined {
+  const firstLine = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  if (!firstLine) return undefined;
+  const cleaned = firstLine.replace(/^#+\s*/, "").trim();
+  return cleaned.slice(0, 80) || undefined;
 }
