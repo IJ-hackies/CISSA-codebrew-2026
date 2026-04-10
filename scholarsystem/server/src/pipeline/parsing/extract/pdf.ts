@@ -41,9 +41,9 @@ export async function extractPdf(buf: Buffer, _filename: string): Promise<PdfExt
     try {
       const page = await doc.getPage(i);
       const content = await page.getTextContent();
-      const pageText = content.items
-        .filter((item: unknown): item is { str: string } => "str" in (item as object))
-        .map((item: { str: string }) => item.str)
+      const pageText = (content.items as { str?: string }[])
+        .filter((item) => typeof item.str === "string")
+        .map((item) => item.str!)
         .join(" ");
       if (pageText.trim()) {
         textContent += (textContent ? "\n\n" : "") + pageText;

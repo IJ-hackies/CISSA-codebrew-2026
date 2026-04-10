@@ -1,16 +1,16 @@
 // Stage 1 prompt: Skeleton pass (Obsidian markdown output).
 //
-// The skeleton pass identifies the topic/subtopic/concept hierarchy and
-// assigns source units to topics. It does NOT extract full concept bodies
-// or derivatives — that's the job of the parallel Stage 2 detail agents.
+// The skeleton pass identifies the cluster/group/entry hierarchy and
+// assigns source units. It does NOT produce wraps — that's the job of
+// the parallel Stage 2 wrap agents.
 //
 // Key design:
 //   - "Identify, don't explain." One-line brief only.
 //   - "Assign every source unit." No source unit left unassigned.
-//   - "Source-unit assignment is a routing decision." Detail agents will
-//     ONLY see the source units assigned to their topic.
-//   - Expanded concept kind taxonomy from Flint.
-//   - Produces _map.md, _structure.md, _etc.md auxiliary files.
+//   - "Aggressive relationship discovery." Wikilinks are hero data.
+//   - EntryKind taxonomy: moment, person, place, theme, artifact,
+//     milestone, period.
+//   - No auxiliary files (_map, _structure, _etc) — v3 simplification.
 
 import type { ChapterId } from "@scholarsystem/shared";
 
@@ -22,31 +22,38 @@ export interface SkeletonPromptInput {
   hasPageImages?: boolean;
   /** Number of page images available. */
   pageCount?: number;
+  /** Pre-extracted digests from Stage 1a (map phase). When provided, the prompt
+   *  reads digests instead of raw source files — much faster for large inputs. */
+  digests?: string;
 }
 
-// Re-export under old name for backward compat during transition.
-export type StructurePromptInput = SkeletonPromptInput;
-
 export function buildSkeletonPrompt(input: SkeletonPromptInput): string {
-  const { chapterId, sourceUnitIds, hasPageImages, pageCount } = input;
+  const { chapterId, sourceUnitIds, hasPageImages, pageCount, digests } = input;
   const unitRange = sourceUnitIds.length > 0
     ? `${sourceUnitIds[0]} through ${sourceUnitIds[sourceUnitIds.length - 1]}`
     : "(none)";
 
-  return `You are an educational content analyst. Read ALL source material in \`sources/${chapterId}/\` and produce a lightweight hierarchical skeleton. Your job is to IDENTIFY and CLASSIFY — not to explain.
+  // When digests are provided (Stage 1a already ran), the prompt reads
+  // the inline digests instead of the raw source files on disk.
+  const sourceInstruction = digests
+    ? `Read the pre-extracted digests below (one per source unit). These summarize the full source material — use them to build the hierarchy.\n\n${digests}`
+    : `Read ALL source material in \`sources/${chapterId}/\` and produce a hierarchical skeleton that maps the content into a navigable galaxy of interconnected nodes.`;
+
+  return `You are a knowledge architect. ${sourceInstruction}
 
 ## What this skeleton is for
 
-This skeleton is a routing manifest. A separate set of parallel detail agents will each receive ONE topic's source units and produce full concept bodies and verbatim quotes. Your job is to:
-1. Identify the topic/subtopic/concept hierarchy
-2. Assign every source unit to a topic (this is the routing decision)
-3. Classify each concept's kind and model tier
+This skeleton feeds a 3D galaxy visualization. Every cluster becomes a solar system. Every entry becomes a planet, moon, comet, or star. Relationships become glowing edges connecting nodes. Your job is to:
+1. Identify the cluster/group/entry hierarchy
+2. Assign every source unit to at least one entry
+3. Classify each entry's kind (what body type it becomes in the galaxy)
+4. **Aggressively discover relationships** — connections are the hero feature
 
 Speed is the priority. Do NOT write explanatory bodies. One-line briefs only.
 
 ## Output format
 
-Create one markdown file per knowledge node in \`stage1-structure/\`. Each file has YAML frontmatter and a body with ONLY [[wikilinks]] to related nodes — no explanatory text.
+Create one markdown file per knowledge node in \`stage1-structure/\`. Each file has YAML frontmatter and a body with [[wikilinks]] to related nodes.
 
 ### File naming
 
@@ -54,167 +61,132 @@ Use the node's id as the filename: \`stage1-structure/<id>.md\`
 
 ### Frontmatter fields
 
-**Topic files** (\`type: topic\`):
+**Cluster files** (\`type: cluster\`):
 \`\`\`yaml
 ---
 id: ${chapterId}-<kebab-slug>
 chapter: ${chapterId}
-type: topic
+type: cluster
 title: <string>
-summary: <1-2 sentences>
+brief: <1-2 sentences, ≤30 words>
 sourceRefs: [${chapterId}-s-NNNN, ...]
 ---
 \`\`\`
 
-**Subtopic files** (\`type: subtopic\`):
+**Group files** (\`type: group\`):
 \`\`\`yaml
 ---
 id: ${chapterId}-<kebab-slug>
 chapter: ${chapterId}
-type: subtopic
-topic: ${chapterId}-<parent-topic-id>
+type: group
+cluster: ${chapterId}-<parent-cluster-id>
 title: <string>
-summary: <1-2 sentences>
+brief: <1-2 sentences, ≤30 words>
 sourceRefs: [${chapterId}-s-NNNN, ...]
 ---
 \`\`\`
 
-**Concept files** (\`type: concept\`):
+**Entry files** (\`type: entry\`):
 \`\`\`yaml
 ---
 id: ${chapterId}-<kebab-slug>
 chapter: ${chapterId}
-type: concept
-subtopic: ${chapterId}-<parent-subtopic-id>
-kind: <see concept kind taxonomy below>
-modelTier: <light|standard|heavy>
+type: entry
+group: ${chapterId}-<parent-group-id>
+kind: <see EntryKind taxonomy below>
 title: <string>
 brief: <1 sentence, ≤30 words — classify, don't explain>
 sourceRefs: [${chapterId}-s-NNNN, ...]
 ---
 
-[[${chapterId}-related-concept-1]]
-[[${chapterId}-related-concept-2]]
+[[${chapterId}-related-entry-1]]
+[[${chapterId}-related-entry-2]]
 \`\`\`
 
-For **loose concepts** (no subtopic parent), omit the \`subtopic\` field entirely.
+For **loose entries** (no parent group), omit the \`group\` field entirely. These become asteroids floating between solar systems.
 
-If a source unit is relevant to multiple topics, assign it to the primary topic and add a \`sharedWith\` field listing the other topic IDs:
-\`\`\`yaml
-sharedWith: [${chapterId}-other-topic-id]
-\`\`\`
-The orchestrator will push that source unit to both topic agents.
+### EntryKind taxonomy — what each entry becomes in the galaxy
 
-### Concept kind taxonomy
+- \`moment\` — a specific event, memory, or experience → **Moon** (small, smooth)
+- \`person\` — a person, character, or relationship → **Planet** (large, atmospheric)
+- \`place\` — a location, setting, or environment → **Planet** (textured, grounded)
+- \`theme\` — a recurring idea, pattern, or motif → **Star** (glowing, emissive)
+- \`artifact\` — a specific object, document, photo, or creation → **Comet** (trailing particles)
+- \`milestone\` — a turning point, achievement, or pivotal moment → **Large Moon** (bright, prominent)
+- \`period\` — a time span, era, or phase of life → **Ringed Planet** (expansive)
 
-- \`definition\` — a named term being formally defined
-- \`formula\` — a mathematical or symbolic rule/equation
-- \`example\` — a worked instance illustrating a concept
-- \`fact\` — a standalone factual claim
-- \`principle\` — a general law, rule, or heuristic
-- \`process\` — a multi-step procedure or algorithm
-- \`framework\` — a model, architecture, or theoretical system
-- \`trade-off\` — a tension between competing approaches
-- \`distinction\` — a key difference between related ideas
-- \`paradigm\` — a major approach or school of thought
-- \`property\` — a characteristic or attribute of a system/concept
+Choose the kind that best captures what the entry IS, not what it's about. A journal entry about a trip is a \`moment\`. The city visited is a \`place\`. The friend who came along is a \`person\`. The life lesson learned is a \`theme\`.
 
-### Model tier guidance (inherent reasoning complexity, not importance)
-- \`light\` — isolated facts, single-sentence definitions, one-step recall
-- \`standard\` — typical explanations, worked examples (default; use when in doubt)
-- \`heavy\` — multi-step reasoning, proofs, heavy prerequisite chains
+## Relationship discovery — the hero feature
 
-## Auxiliary files
+Wikilinks (\`[[target-id]]\`) in note bodies become visible edges in the 3D galaxy. **Be aggressive.** Every meaningful connection you discover makes the galaxy more interesting and navigable.
+
+Types of connections to look for:
+- **Temporal**: events that happen in sequence or overlap
+- **Causal**: one thing leading to or causing another
+- **Involves**: shared people, places, or artifacts
+- **References**: one entry explicitly mentions another
+- **Contrasts**: entries in tension or opposition
+- **Related**: general semantic or thematic similarity
+
+Add wikilinks generously. A galaxy with 50 entries and 100+ connections is better than one with 50 entries and 20 connections. Cross-cluster connections are especially valuable — they're the wormholes between solar systems.
+
+## Summary file
 
 ### \`stage1-structure/_summary.md\`
 \`\`\`yaml
 ---
 type: summary
-title: <overall title for the material>
+title: <overall title for this galaxy>
 summary: <2-3 sentence overview>
 ---
 \`\`\`
 
-### \`stage1-structure/_map.md\` — thematic groupings
-\`\`\`yaml
----
-type: map
-groups:
-  - name: <theme name>
-    conceptIds: [${chapterId}-concept-a, ${chapterId}-concept-b]
-  - name: <another theme>
-    conceptIds: [${chapterId}-concept-c]
----
-\`\`\`
-Group concepts by thematic similarity. This feeds narrative generation.
-
-### \`stage1-structure/_structure.md\` — structural/transitional content
-\`\`\`yaml
----
-type: structure
-sourceUnits:
-  - id: ${chapterId}-s-NNNN
-    role: intro|transition|section-marker|recap|conclusion
-    note: <brief description of what this unit contains>
----
-\`\`\`
-List source units that contain structural/transitional content (introductions, section markers, transitions between topics, recaps). These are NOT concepts — they are routing metadata. The detail agents will include derivatives for them.
-
-### \`stage1-structure/_etc.md\` — non-knowledge-bearing content
-\`\`\`yaml
----
-type: etc
-sourceUnits:
-  - id: ${chapterId}-s-NNNN
-    reason: <why this is not learnable content (announcements, logistics, verbal filler, redundant repetition)>
----
-\`\`\`
-List source units that genuinely contain no learnable knowledge. Be conservative — if in doubt, assign to a topic instead.
-
 ## Critical rules
 
-1. **Three levels only**: topic → subtopic → concept. Flatten deeper hierarchies.
+1. **Three levels only**: cluster → group → entry. Flatten deeper hierarchies.
 2. **Every id starts with \`${chapterId}-\`** and is kebab-case.
-3. **ASSIGN EVERY SOURCE UNIT.** Every source-unit ID (${unitRange}) must appear in at least one concept's \`sourceRefs\`, or in \`_structure.md\`, or in \`_etc.md\`. No source unit left unassigned. This is the 100% accountability rule.
-4. **Source-unit assignment IS a routing decision.** The detail agents will ONLY see the source units assigned to their topic. If you miss a source unit, that content will be lost.
-5. **Ids must be unique** across all files.
-6. **Every parent reference must exist** as a file of the correct type.
-7. **Preserve the source's own terminology.** Don't rename things.
-8. **Scale**: 2-6 topics, 2-5 subtopics per topic, 2-8 concepts per subtopic. Scale with input size — don't force content into a fixed number.
-9. **Identify, don't explain.** Concept briefs should be classification-level: ≤30 words. No paragraphs, no definitions. The detail agents handle that.
+3. **ASSIGN EVERY SOURCE UNIT.** Every source-unit ID (${unitRange}) must appear in at least one entry's \`sourceRefs\`. No source unit left unassigned. This is the 100% accountability rule.
+4. **Ids must be unique** across all files.
+5. **Every parent reference must exist** as a file of the correct type.
+6. **Preserve the source's own terminology.** Don't rename things.
+7. **Scale**: 2-6 clusters, 2-5 groups per cluster, 2-8 entries per group. Scale with input size.
+8. **Identify, don't explain.** Entry briefs should be classification-level: ≤30 words. No paragraphs, no definitions.
+9. **Wikilink aggressively.** Every entry should have at least 2-3 wikilinks to related entries. Cross-cluster links are especially valuable.
 
 ## Worked example (shape only)
 
-\`stage1-structure/${chapterId}-solar-system.md\`:
+\`stage1-structure/${chapterId}-childhood-memories.md\`:
 \`\`\`markdown
 ---
-id: ${chapterId}-solar-system
+id: ${chapterId}-childhood-memories
 chapter: ${chapterId}
-type: topic
-title: The Solar System
-summary: Worlds orbiting our star and how they differ.
+type: cluster
+title: Childhood Memories
+brief: Early years growing up in Melbourne, family dynamics and formative experiences.
 sourceRefs: [${chapterId}-s-0001, ${chapterId}-s-0002, ${chapterId}-s-0003]
 ---
 \`\`\`
 
-\`stage1-structure/${chapterId}-rocky-planet-def.md\`:
+\`stage1-structure/${chapterId}-first-day-at-school.md\`:
 \`\`\`markdown
 ---
-id: ${chapterId}-rocky-planet-def
+id: ${chapterId}-first-day-at-school
 chapter: ${chapterId}
-type: concept
-subtopic: ${chapterId}-inner-planets
-kind: definition
-modelTier: light
-title: Rocky Planet Definition
-brief: A silicate/metal-surfaced planet, contrasted with gas giants.
+type: entry
+group: ${chapterId}-school-days
+kind: moment
+title: First Day at School
+brief: The nervous excitement of starting primary school, September 1998.
 sourceRefs: [${chapterId}-s-0004]
 ---
 
-[[${chapterId}-gas-giant-def]]
+[[${chapterId}-mum]]
+[[${chapterId}-melbourne-suburb]]
+[[${chapterId}-making-friends]]
 \`\`\`
 
-Now read ALL source material in \`sources/${chapterId}/\` and create the skeleton files. Remember: assign EVERY source unit, classify don't explain, keep it lightweight.${hasPageImages ? `
+Now read ALL source material in \`sources/${chapterId}/\` and create the skeleton files. Remember: assign EVERY source unit, classify don't explain, wikilink aggressively.${hasPageImages ? `
 
 ## IMPORTANT: PDF Page Images Available
 
@@ -228,6 +200,3 @@ The source material was uploaded as a PDF. The text extraction in \`sources/${ch
 
 Use the page images as the PRIMARY source of truth. The text files are a supplement, not the authority. When the text and images disagree, trust the images.` : ""}`;
 }
-
-// Backward compat alias.
-export const buildStructurePrompt = buildSkeletonPrompt;

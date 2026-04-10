@@ -40,62 +40,50 @@ Every cluster is a solar system. Every entry is a planet, moon, comet, or star. 
 2.5 Coverage Audit   →  wraps adjustments                (pure code + Claude — mostly reusable)
 ```
 
-### What's reusable from existing code
+### Pipeline component status
 
 | Component | Status | Notes |
 |---|---|---|
-| Stage 0 chunker (`pipeline/chunker.ts`) | **Fully reusable** | Pure code, content-agnostic |
-| Stage 0 extractors (`pipeline/parsing/extract/`) | **Fully reusable** | txt/pdf/docx/pptx |
-| Stage 1 skeleton (`pipeline/skeleton.ts`) | **Partially reusable** | Logic reusable, prompt needs rewrite for new vocabulary + aggressive connection discovery + EntryKind assignment |
-| Stage 1 prompt (`prompts/structure.ts`) | **Rewrite** | New vocabulary, new output shape (clusters/groups/entries, EntryKind, more relationship types) |
-| Stage 2 fan-out infra (`lib/proxy-client.ts`) | **Fully reusable** | `fanOutSubSessions`, `mergeSubSessionFiles` |
-| Stage 2 detail logic (`pipeline/detail.ts`) | **Partially reusable** | Fan-out pattern reusable, but output format changes to wraps |
-| Stage 2 prompt (`prompts/detail.ts`) | **Rewrite** | New wrap-structured output (headline, summary, body, mood, color, stats, highlights, keyFacts, connections) |
-| Stage 2.5 coverage (`pipeline/coverage.ts`) | **Mostly reusable** | Core logic unchanged, just validate wraps instead of detail entries |
-| Compile step (`pipeline/compile/`) | **Partial rewrite** | New scope shapes to compile (wraps instead of detail+narrative+visuals) |
-| Proxy (`proxy/`) | **Fully reusable** | Infrastructure, zero changes |
-| SQLite store (`db/store.ts`) | **Fully reusable** | Blob store, content-agnostic |
-| Proxy client (`lib/proxy-client.ts`) | **Fully reusable** | HTTP+SSE client for proxy |
+| Stage 0 chunker (`pipeline/chunker.ts`) | **Done** | Patched for v3 ChapterEntry shape |
+| Stage 0 extractors (`pipeline/parsing/extract/`) | **Done** | Unchanged, fully reusable |
+| Stage 1 skeleton (`pipeline/skeleton.ts`) | **Done** | Rewritten for v3 knowledge shape, addedNodeIds |
+| Stage 1 prompt (`prompts/structure.ts`) | **Done** | cluster/group/entry vocabulary, EntryKind, aggressive relationship discovery |
+| Stage 2 wraps (`pipeline/wraps.ts`) | **Done** | NEW file, replaces detail.ts. Fans out ALL nodes. |
+| Stage 2 prompt (`prompts/wraps.ts`) | **Done** | NEW file. Per-node wrap prompt with cluster/group/entry variants |
+| Stage 2.5 coverage (`pipeline/coverage.ts`) | **Done** | Adapted for v3 wraps derivatives, EntryKind, stage name "coverage" |
+| Compile step (`pipeline/compile/index.ts`) | **Done** | compileStructure() v3, compileWraps() replaces compileDetail/Narrative/Visuals |
+| `lib/blob.ts` | **Done** | v3 pipeline (4 stages), v3 galaxy shape (7 scopes) |
+| Stage 2 fan-out infra (`lib/proxy-client.ts`) | **Done** | Unchanged, fully reusable |
+| Proxy (`proxy/`) | **Done** | Unchanged, fully reusable |
+| SQLite store (`db/store.ts`) | **Done** | Unchanged, fully reusable |
+| Pipeline runner (`runner.ts`) | **Done** | Sequential 0→1→2→2.5, no background path |
+| API routes (`routes/galaxy.ts`) | **Done** | Scene endpoints removed |
+| Test script (`scripts/test-pipeline.ts`) | **Done** | Updated for v3 summary |
 
-### What's deleted
+### Deleted (Phase 4) — COMPLETE
 
-| Component | Why |
-|---|---|
-| Stage 3 narrative (`pipeline/narrative.ts`, `prompts/narrative.ts`) | No galaxy-wide narrative — each wrap has its own mood/color |
-| Stage 4 layout (`pipeline/layout.ts`) | Frontend force-graph computes positions |
-| Stage 5 visuals (`pipeline/visuals.ts`, `prompts/worldgen/visuals.ts`) | Frontend derives visuals from kind + mood + color |
-| Pipeline runner's background path (stages 3→4→5) | Only stages 0→1→2→2.5 exist now |
-| `compileNarrative()`, `compileVisuals()`, `compileSpatial()` | Scopes no longer exist |
+18 files removed. All old pipeline stages, prompts, parsing, and spawner code deleted. Typecheck clean (only pre-existing pdf-parse library type mismatch remains).
 
 ---
 
-## Schema Changes (`shared/types/`)
+## Schema Changes (`shared/types/`) — COMPLETE
 
-### Files to rewrite
+All v3 type files are written and exported. Phase 1 is done.
 
-| File | Change |
+| File | Status |
 |---|---|
-| `galaxy.ts` | 7 scopes instead of 12. Drop detail/narrative/spatial/visuals/scenes/conversations/progress. Add wraps/exploration. |
-| `knowledge.ts` (or new name) | Cluster/Group/Entry with `EntryKind`. Replaces Topic/Subtopic/Concept. |
-| `relationships.ts` | Expanded `EdgeType` (add `temporal`, `causal`, `involves`). Add `weight`, `label`. |
-| `wraps.ts` (new) | `WrapBase`, `ClusterWrap`, `GroupWrap`, `EntryWrap`, `Mood`, `WrapStat`, `WrapFact`, `WrapConnection`, `Derivative`. |
-| `exploration.ts` (new) | Visited, bookmarked, optional persisted positions. |
-| `pipeline.ts` | 4 stages only (ingest, structure, wraps, coverage). |
-| `ids.ts` | `Slug`, `ChapterId`, `SourceUnitId` — unchanged. |
-| `source.ts` | Unchanged (maybe add optional `mediaUrl`/`mediaType` on units as stretch). |
-| `meta.ts` | Mostly unchanged. `schemaVersion: 3`. `addedNodeIds` replaces `addedKnowledgeIds`/`addedBodyIds`. |
+| `galaxy.ts` | **Done** — 7 scopes (meta, source, knowledge, relationships, wraps, exploration, pipeline) |
+| `knowledge.ts` | **Done** — Cluster/Group/Entry with `EntryKind` (7 kinds) |
+| `relationships.ts` | **Done** — `RelationshipEdge` with `EdgeType` (6 types), `weight`, `label` |
+| `wraps.ts` | **Done** — `ClusterWrap`, `GroupWrap`, `EntryWrap` discriminated union on `level`, `Mood`, `Derivative` |
+| `exploration.ts` | **Done** — visited, bookmarked, optional positions |
+| `pipeline.ts` | **Done** — 4 stages (ingest, structure, wraps, coverage), `StageState` |
+| `ids.ts` | **Done** — unchanged (`Slug`, `ChapterId`, `SourceUnitId`) |
+| `source.ts` | **Done** — unchanged |
+| `meta.ts` | **Done** — `schemaVersion: 3`, `addedNodeIds` |
+| `index.ts` | **Done** — re-exports all |
 
-### Files to delete
-
-| File | Why |
-|---|---|
-| `detail.ts` | Merged into wraps |
-| `narrative.ts` | Dropped |
-| `spatial.ts` | Dropped (frontend computes) |
-| `visuals.ts` | Dropped (frontend derives) |
-| `scenes.ts` | Dropped |
-| `conversations.ts` | Dropped |
-| `progress.ts` | Replaced by exploration |
+Old scope files to delete (Phase 4): `detail.ts`, `narrative.ts`, `spatial.ts`, `visuals.ts`, `scenes.ts`, `conversations.ts`, `progress.ts`
 
 ---
 

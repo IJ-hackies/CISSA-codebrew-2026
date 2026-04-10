@@ -2,7 +2,6 @@ import { Hono, type Context } from "hono";
 import { sampleGalaxy } from "../fixtures/sample-galaxy";
 import { loadGalaxy, saveGalaxy } from "../db/store";
 import { runPipeline, sanitizeChapterId } from "../pipeline/runner";
-import { generateScene } from "../pipeline/scene";
 import { createHash } from "node:crypto";
 import { extractFiles, UnsupportedFormatError } from "../pipeline/parsing/extract";
 import type { SourceKind, SourcePart } from "@scholarsystem/shared";
@@ -14,10 +13,8 @@ const MAX_TOTAL_BYTES = 100 * 1024 * 1024; // 100 MB
 
 // Galaxy routes.
 //
-// GET  /:id                       — fetch a stored galaxy
-// POST /create                    — run pipeline fast path, kick off background
-// GET  /:id/scene/:bodyId         — fetch cached scene (404 if not generated)
-// POST /:id/scene/:bodyId/generate — generate scene on-demand (SSE stream)
+// GET  /:id       — fetch a stored galaxy
+// POST /create    — run the full pipeline (0 → 1 → 2 → 2.5)
 export const galaxyRoutes = new Hono();
 
 galaxyRoutes.get("/:id", (c) => {
@@ -63,20 +60,16 @@ function hashUtf8(s: string): string {
  * optional pasted text). Throws a plain Error with a message suitable
  * for a 4xx response; the route handler turns that into a JSON error.
  *
- * Multi-file strategy (Option A from the design discussion): extract
- * each file in parallel, concatenate into one blob with `# <filename>`
- * boundary markers (which Stage 1 already treats as strong topic cues),
- * append the pasted text as its own final section, and record per-part
- * provenance on `Source.parts`. Downstream stages see a single text
- * blob exactly like before — no pipeline refactor needed.
+ * Multi-file strategy: extract each file in parallel, concatenate into
+ * one blob with `# <filename>` boundary markers, append the pasted text
+ * as its own final section, and record per-part provenance on
+ * `Source.parts`. Downstream stages see a single text blob.
  */
 async function resolveCreateInput(c: Context): Promise<ResolvedInput> {
   const contentType = c.req.header("content-type") ?? "";
 
   // ─── Multipart (multi-file + optional paste) path ────────────
   if (contentType.includes("multipart/form-data")) {
-    // `all: true` collapses repeated form fields into arrays so we can
-    // accept multiple `file` entries under the same field name.
     const form = await c.req.parseBody({ all: true });
     const rawFiles = form["file"];
     const fileArr: File[] = Array.isArray(rawFiles)
@@ -100,9 +93,7 @@ async function resolveCreateInput(c: Context): Promise<ResolvedInput> {
       throw new Error(`combined upload exceeds ${MAX_TOTAL_BYTES} byte limit`);
     }
 
-    // Read + extract all files in parallel. extractFiles rejects on any
-    // single failure — better to surface "pptx failed" than to silently
-    // drop a file the user expected to be in their galaxy.
+    // Read + extract all files in parallel.
     const fileInputs = await Promise.all(
       fileArr.map(async (f) => ({ buf: Buffer.from(await f.arrayBuffer()), name: f.name })),
     );
@@ -152,9 +143,6 @@ async function resolveCreateInput(c: Context): Promise<ResolvedInput> {
       throw new Error("no extractable content found in upload");
     }
 
-    // Single-part uploads keep their specific kind / filename so the
-    // common case looks identical to pre-multi-file behaviour. Only
-    // genuine multi-part ingests get tagged `mixed`.
     const isMulti = parts.length > 1;
     const single = parts[0];
     return {
@@ -210,13 +198,11 @@ galaxyRoutes.post("/create", async (c) => {
         pageImages: resolved.pageImages,
       },
       {
-        // Re-persist after each background stage completes so detail,
-        // coverage, and narrative results survive even if the server
-        // restarts before all stages finish.
+        // Persist after each stage completes so progress survives restarts.
         onStageComplete: (g, stage) => {
           try {
             saveGalaxy(g);
-            console.log(`[galaxy/create] persisted after background stage: ${stage}`);
+            console.log(`[galaxy/create] persisted after stage: ${stage}`);
           } catch (err) {
             console.error(`[galaxy/create] failed to persist after ${stage}:`, err);
           }
@@ -230,63 +216,5 @@ galaxyRoutes.post("/create", async (c) => {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[galaxy/create] pipeline failed:", message);
     return c.json({ error: "pipeline failed", message }, 500);
-  }
-});
-
-// ─── Scene endpoints ──────────────────────────────────────────────────
-
-/**
- * GET /:id/scene/:bodyId — returns cached scene if it exists, 404 otherwise.
- * The frontend tries this first; if 404, it calls the generate endpoint.
- */
-galaxyRoutes.get("/:id/scene/:bodyId", (c) => {
-  const { id, bodyId } = c.req.param();
-  const galaxy = loadGalaxy(id);
-  if (!galaxy) return c.json({ error: "galaxy not found" }, 404);
-
-  const scene = galaxy.scenes[bodyId];
-  if (!scene) return c.json({ error: "scene not generated yet" }, 404);
-
-  return c.json(scene);
-});
-
-/**
- * POST /:id/scene/:bodyId/generate — generate a scene on-demand.
- *
- * Returns SSE stream with events:
- *   - event: status   data: { status: "generating" }
- *   - event: scene    data: <Scene JSON>
- *   - event: error    data: { message: "..." }
- *   - event: done     data: { durationMs: N }
- *
- * If a cached scene already exists, returns it immediately without
- * calling Claude.
- */
-galaxyRoutes.post("/:id/scene/:bodyId/generate", async (c) => {
-  const { id, bodyId } = c.req.param();
-  const galaxy = loadGalaxy(id);
-  if (!galaxy) return c.json({ error: "galaxy not found" }, 404);
-
-  // Check cache — return immediately if already generated.
-  const cached = galaxy.scenes[bodyId];
-  if (cached) {
-    return c.json(cached);
-  }
-
-  // Validate body exists and is interactive.
-  const body = galaxy.spatial?.bodies.find((b) => b.id === bodyId);
-  if (!body) return c.json({ error: "body not found" }, 404);
-  if (!("knowledgeRef" in body) || !body.knowledgeRef) {
-    return c.json({ error: "body is not interactive" }, 400);
-  }
-
-  // Generate scene (may call Claude or fall back to deterministic).
-  try {
-    const { scene, durationMs } = await generateScene(galaxy, bodyId);
-    return c.json(scene);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[scene] generation failed for ${bodyId}:`, message);
-    return c.json({ error: "scene generation failed", message }, 500);
   }
 });

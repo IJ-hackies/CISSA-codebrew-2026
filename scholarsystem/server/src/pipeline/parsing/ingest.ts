@@ -73,8 +73,7 @@ export function runIngest(input: IngestInput): IngestResult {
       id: chapterId,
       uploadedAt: Date.now(),
       filename: input.filename,
-      addedKnowledgeIds: [],
-      addedBodyIds: [],
+      addedNodeIds: [],
     },
   ];
 
