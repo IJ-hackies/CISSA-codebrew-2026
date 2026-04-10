@@ -16,9 +16,11 @@ import {
   type GalaxyEntry,
 } from '@/lib/recentGalaxies'
 import { createGalaxy } from '@/lib/api'
+import { useGalaxyStore } from '@/lib/galaxyStore'
 
 const router = useRouter()
 const isMobile = useIsMobile()
+const { setGalaxy } = useGalaxyStore()
 useVisualViewport()
 
 const text = ref('')
@@ -222,6 +224,9 @@ async function handleSubmit(origin: { x: number; y: number }) {
       await renderer.landRocket()
     }
 
+    // Store the full blob so GalaxyMap can read it without re-fetching.
+    if (galaxy) setGalaxy(galaxy as any)
+
     const entry: GalaxyEntry = {
       uuid: galaxy?.meta?.id,
       title: galaxy?.meta?.title,
@@ -355,7 +360,7 @@ async function handleSubmit(origin: { x: number; y: number }) {
   z-index: 10;
   display: inline-flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   text-decoration: none;
   opacity: 0.92;
   transition:
@@ -365,7 +370,7 @@ async function handleSubmit(origin: { x: number; y: number }) {
 }
 .wordmark {
   font-family: var(--font-ui);
-  font-size: 0.72rem;
+  font-size: 0.6rem;
   font-weight: 500;
   letter-spacing: 0.28em;
   color: var(--color-text-primary);
@@ -378,7 +383,7 @@ async function handleSubmit(origin: { x: number; y: number }) {
   transform: translateY(-1px);
 }
 .logo {
-  width: 160px;
+  width: 100px;
   height: auto;
   display: block;
   user-select: none;
@@ -403,8 +408,8 @@ async function handleSubmit(origin: { x: number; y: number }) {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 28px;
-  padding: 120px 24px 100px;
+  gap: 18px;
+  padding: 100px 24px 80px;
   transition: transform 600ms ease;
 }
 
@@ -461,13 +466,13 @@ async function handleSubmit(origin: { x: number; y: number }) {
 }
 .tagline {
   font-family: var(--font-body);
-  font-size: 2.1rem;
+  font-size: 1.55rem;
   font-weight: 300;
-  line-height: 1.2;
+  line-height: 1.25;
   color: var(--color-text-primary);
   margin: 0;
   letter-spacing: -0.018em;
-  max-width: 680px;
+  max-width: 520px;
 }
 .tagline strong {
   font-weight: 600;
@@ -475,21 +480,22 @@ async function handleSubmit(origin: { x: number; y: number }) {
 }
 @media (min-width: 1280px) {
   .tagline {
-    font-size: 2.6rem;
+    font-size: 1.75rem;
   }
 }
 @media (min-width: 1536px) {
   .tagline {
-    font-size: 3rem;
+    font-size: 1.95rem;
+    max-width: 560px;
   }
 }
 
 .hints {
   display: inline-flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   font-family: var(--font-ui);
-  font-size: 0.74rem;
+  font-size: 0.65rem;
   color: var(--color-text-muted);
   letter-spacing: 0.04em;
   animation: heroIn 1300ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
@@ -497,9 +503,9 @@ async function handleSubmit(origin: { x: number; y: number }) {
 }
 .hints kbd {
   display: inline-block;
-  padding: 2px 7px;
+  padding: 1px 5px;
   font-family: var(--font-ui);
-  font-size: 0.7rem;
+  font-size: 0.6rem;
   font-weight: 600;
   color: var(--color-text-primary);
   background: rgba(245, 240, 234, 0.04);

@@ -4,9 +4,13 @@
 // a UUID, hashes the content, writes the `source` scope, and returns a
 // blank blob with `pipeline.ingest` marked done. Raw input is NOT stored —
 // only its hash + 500-char excerpt, per the blob's "no raw uploads" rule.
+//
+// NOTE: This is transitional v1→v2 code. The real v2 chunker
+// (`pipeline/chunker.ts`) will produce proper numbered source units. For
+// now we emit a single unit per chapter so the schema validates.
 
 import { createHash, randomUUID } from "node:crypto";
-import { Galaxy, Source, SourceKind, SourcePart } from "../../../../shared/types";
+import { Galaxy, SourceKind, SourcePart } from "../../../../shared/types";
 import { createEmptyGalaxy, stageStart, stageDone } from "../../lib/blob";
 
 export interface IngestInput {
@@ -34,20 +38,47 @@ export function runIngest(input: IngestInput): IngestResult {
   const contentHash = createHash("sha256").update(input.text).digest("hex");
   const excerpt = input.text.slice(0, 500);
 
-  const source: Source = {
-    kind: input.kind,
-    filename: input.filename,
-    byteSize,
-    charCount,
-    contentHash,
-    excerpt,
-    ...(input.parts && input.parts.length > 0 ? { parts: input.parts } : {}),
+  const chapterId = "w1";
+
+  const source: Galaxy["source"] = {
+    chapters: [
+      {
+        id: chapterId,
+        kind: input.kind,
+        filename: input.filename,
+        byteSize,
+        charCount,
+        contentHash,
+        excerpt,
+        ...(input.parts && input.parts.length > 0 ? { parts: input.parts } : {}),
+        // Transitional: emit the whole text as a single source unit so the
+        // schema validates. The real chunker will split properly.
+        units: [
+          {
+            id: `${chapterId}-s-0001`,
+            text: input.text,
+            charStart: 0,
+            charEnd: charCount,
+          },
+        ],
+      },
+    ],
   };
 
   const title = input.title?.trim() || deriveTitle(input.text);
   const id = randomUUID();
 
-  const galaxy = createEmptyGalaxy({ id, title, source });
+  const chapters: Galaxy["meta"]["chapters"] = [
+    {
+      id: chapterId,
+      uploadedAt: Date.now(),
+      filename: input.filename,
+      addedKnowledgeIds: [],
+      addedBodyIds: [],
+    },
+  ];
+
+  const galaxy = createEmptyGalaxy({ id, title, source, chapters });
 
   // Stage 0 is synchronous and trivial — flip start and done back-to-back
   // so the pipeline scope reflects that ingest has actually run.

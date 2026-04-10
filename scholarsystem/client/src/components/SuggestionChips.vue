@@ -30,20 +30,20 @@ const emit = defineEmits<{
 .chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
   justify-content: center;
-  max-width: 720px;
+  max-width: 560px;
   margin-inline: auto;
 }
 .chip {
   font-family: var(--font-ui);
-  font-size: 0.78rem;
+  font-size: 0.68rem;
   font-weight: 500;
   letter-spacing: 0.01em;
   color: var(--color-text-muted);
   background: rgba(245, 240, 234, 0.025);
   border: 1px solid var(--color-hairline);
-  padding: 9px 16px;
+  padding: 6px 12px;
   border-radius: 999px;
   backdrop-filter: blur(6px);
   transition:
