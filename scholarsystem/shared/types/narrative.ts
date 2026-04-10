@@ -1,10 +1,18 @@
 import { z } from "zod";
-import { Slug } from "./ids";
+import { ChapterId, Slug } from "./ids";
 
-// Galaxy-wide story spine. Produced by Stage 3 after detail extraction
-// (option B) so beats can be grounded in specific content. Read by
-// Stage 5 (visuals, for tone-matched theming) and on-demand scene gen
-// (so every scene is a beat within the arc, not an isolated story).
+// Galaxy-wide story spine. Split into two parts so that chapter
+// extensions behave correctly:
+//
+//   canon  — setting, cast, tone, aesthetic. FROZEN after first
+//            generation. Subsequent chapter uploads treat canon as
+//            immutable input; they may read it but never rewrite it.
+//            This is what prevents tonal drift when week 2 arrives.
+//
+//   arcs[] — per-chapter story beats. APPEND-ONLY. First ingest
+//            writes arcs[0]; every extension appends a new ChapterArc
+//            that references the frozen canon (cast, tone) and only
+//            introduces new beats for the chapter's new topics.
 
 export const TonePrimary = z.enum([
   "mysterious",
@@ -73,23 +81,39 @@ export const Character = z.object({
   arc: z.string(),
 });
 
-export const Narrative = z.object({
+// The immutable spine. Written once, on first-chapter ingest. Every
+// subsequent chapter extension reads this as input and MUST NOT
+// modify it.
+export const NarrativeCanon = z.object({
   setting: z.string(),
   protagonist: z.string(),
   premise: z.string(),
   stakes: z.string(),
   tone: Tone,
   aesthetic: Aesthetic,
-  arcSummary: z.string(),
-  arcBeats: z.array(ArcBeat),
   recurringCharacters: z.array(Character),
   finaleHook: z.string(),
   // Soft guidance — appended to the scene gen prompt as "avoid these".
-  // No post-hoc validator runs against them (hackathon scope).
   hardConstraints: z.array(z.string()),
 });
 
+// Per-chapter story content. First ingest produces arcs[0]; each
+// extension appends. Existing entries are frozen.
+export const ChapterArc = z.object({
+  chapter: ChapterId,
+  arcSummary: z.string(),
+  beats: z.array(ArcBeat),
+  chapterHook: z.string(),
+});
+
+export const Narrative = z.object({
+  canon: NarrativeCanon.nullable(), // null until first generation
+  arcs: z.array(ChapterArc),
+});
+
 export type Narrative = z.infer<typeof Narrative>;
+export type NarrativeCanon = z.infer<typeof NarrativeCanon>;
+export type ChapterArc = z.infer<typeof ChapterArc>;
 export type Tone = z.infer<typeof Tone>;
 export type Aesthetic = z.infer<typeof Aesthetic>;
 export type ArcBeat = z.infer<typeof ArcBeat>;

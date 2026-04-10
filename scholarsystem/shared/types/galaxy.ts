@@ -18,18 +18,23 @@ import { Pipeline } from "./pipeline";
 // empty state). The `pipeline` scope is the source of truth for what is
 // ready to render; never derive readiness from whether a scope is null.
 //
-// Mutability zones:
-//   write-once: meta.id/createdAt, source, knowledge, detail,
-//               relationships, narrative, spatial, visuals
-//   append-only: scenes, conversations (turns appended, never mutated)
-//   mutable:    progress, pipeline, meta.updatedAt, meta.title
+// Mutability zones (enforce in code, not just docs):
+//   immutable:   meta.id, meta.createdAt, narrative.canon,
+//                existing source.chapters[] entries (+ their units[])
+//   append-only: meta.chapters[], knowledge.topics/subtopics/concepts,
+//                detail, relationships, narrative.arcs[],
+//                spatial.bodies[], visuals; plus spatial.bodies[].position
+//                is frozen once set (a visited moon must never teleport
+//                when a later chapter lands)
+//   append-only within lifetime: scenes, conversations
+//   mutable:     progress, pipeline, meta.updatedAt, meta.title
 export const Galaxy = z.object({
   meta: Meta,
   source: Source,
   knowledge: Knowledge.nullable(),   // Stage 1
   detail: Detail,                     // Stage 2 — starts {}
   relationships: Relationships,       // Stage 1 — starts []
-  narrative: Narrative.nullable(),   // Stage 3
+  narrative: Narrative,               // { canon: null, arcs: [] } initially
   spatial: Spatial.nullable(),       // Stage 4
   visuals: Visuals,                   // Stage 5 — starts {}
   scenes: Scenes,                     // on-demand — starts {}

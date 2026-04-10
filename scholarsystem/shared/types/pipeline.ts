@@ -18,10 +18,15 @@ export const StageState = z.object({
   error: z.string().nullable(),
 });
 
+// Stage names mirror the pipeline in SCHEMA.md. `coverageAudit` is the
+// pure-code uncited-unit diff plus targeted gap-audit Claude call that
+// runs between detail and narrative — it's the accuracy backstop, so
+// it gets its own status entry rather than being hidden inside detail.
 export const Pipeline = z.object({
   ingest: StageState,
   structure: StageState,
   detail: StageState,
+  coverageAudit: StageState,
   narrative: StageState,
   layout: StageState,
   visuals: StageState,

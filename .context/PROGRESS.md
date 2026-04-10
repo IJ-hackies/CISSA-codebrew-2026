@@ -19,24 +19,25 @@ Status: **in progress** (mockup mode, fake submit, localStorage scaffolding)
 - [ ] **Stubbed** — `Renderer.setPointer()` still on public API but no longer consumed (calmer ambient model — kept for forward compatibility)
 
 ### Backend v2 — Workspace Proxy + Obsidian Markdown Rewrite
-Status: **design locked, implementation not started** — supersedes the earlier spawner + TAB-delimited Stage 1 + in-memory Stage 2 approach. The prior backend work under `server/src/pipeline/parsing/` (ingest, structure, detail, extractors) and `pipeline/worldgen/layout.ts` is being superseded; extractor dispatch + the SQLite store carry over, everything else is rebuilt.
+Status: **schema v2 done, proxy scaffolded, API server pipeline next** — supersedes the earlier spawner + TAB-delimited Stage 1 + in-memory Stage 2 approach. The prior backend work under `server/src/pipeline/parsing/` (ingest, structure, detail, extractors) and `pipeline/worldgen/layout.ts` is being superseded; extractor dispatch + the SQLite store carry over, everything else is rebuilt. Branch: `feat/proxy-server`.
 
 **Schema changes (do first — blocks everything else):**
-- [ ] `source.chapters[].units[]` — stable numbered source units (`w1-s-0001`), immutable once written
-- [ ] `meta.chapters[]` — upload history (`id`, `uploadedAt`, `filename`, `addedKnowledgeIds`, `addedBodyIds`)
-- [ ] `narrative.canon` vs `narrative.arcs[]` split — canon frozen after first generation, arcs append per chapter
-- [ ] `sourceRefs: Slug[]` with `.min(1)` on every `knowledge` node, `detail` entry, and `relationships` edge
-- [ ] `Slug` schema extended to require chapter prefix (`^[a-z][a-z0-9]*-[a-z][a-z0-9-]*$`)
-- [ ] Mutability table updated: append-only (not write-once) for `knowledge`, `detail`, `relationships`, `spatial`, `visuals`; position-lock on `spatial.bodies[].position`
+- [x] `source.chapters[].units[]` — stable numbered source units (`w1-s-0001`), immutable once written
+- [x] `meta.chapters[]` — upload history (`id`, `uploadedAt`, `filename`, `addedKnowledgeIds`, `addedBodyIds`)
+- [x] `narrative.canon` vs `narrative.arcs[]` split — canon frozen after first generation, arcs append per chapter
+- [x] `sourceRefs: Slug[]` with `.min(1)` on every `knowledge` node, `detail` entry, and `relationships` edge
+- [x] `Slug` schema extended to require chapter prefix (`^[a-z][a-z0-9]*-[a-z][a-z0-9-]*$`); added `ChapterId` + `SourceUnitId`
+- [x] `meta.schemaVersion` bumped to 2; mutability comment in `galaxy.ts` rewritten for the new append-only zones + `spatial.bodies[].position` lock
+- [x] `pipeline.coverageAudit` stage added (Stage 2.5 status entry)
 
 **Workspace proxy (`scholarsystem/proxy/`):**
-- [ ] HTTP+SSE Hono server, VPS-deployable
-- [ ] Worker pool of long-running Claude Code processes with concurrency cap
-- [ ] Per-galaxy workspace directories (`workspaces/<galaxyId>/`) with stage subfolders
-- [ ] Endpoints: `POST /session/:id/files`, `POST /session/:id/run`, `GET /session/:id/compile`, `DELETE /session/:id`
-- [ ] Rehydration: given a stored blob, reconstruct the workspace for chapter extensions
-- [ ] TTL-based idle cleanup; per-session single-writer lock
-- [ ] Proxy-client library for the API server (`server/src/lib/proxy-client.ts`), replacing `spawner.ts`
+- [x] HTTP+SSE Hono server, VPS-deployable (`proxy/src/index.ts`, port 4100)
+- [x] Worker pool of long-running Claude Code processes with concurrency cap (`proxy/src/worker/pool.ts`)
+- [x] Per-galaxy workspace directories (`workspaces/<galaxyId>/`) with stage subfolders (`proxy/src/workspace/manager.ts`)
+- [x] Endpoints: `POST /session/:id/files`, `POST /session/:id/run` (SSE), `GET /session/:id/compile`, `DELETE /session/:id` (`proxy/src/routes/session.ts`)
+- [x] Rehydration: given a stored blob, reconstruct the workspace for chapter extensions (`proxy/src/workspace/rehydrate.ts`)
+- [x] TTL-based idle cleanup; per-session single-writer lock (`sweepIdle`, `acquireWriteLock`/`releaseWriteLock` in manager)
+- [x] Proxy-client library for the API server (`server/src/lib/proxy-client.ts`), replacing `spawner.ts`
 
 **API server pipeline rewrite (`scholarsystem/server/`):**
 - [ ] Stage 0 chunker — pure code, `pipeline/chunker.ts`, produces numbered source units per chapter
@@ -73,6 +74,8 @@ Status: **design locked, implementation not started** — supersedes the earlier
 
 _Append newest entries at the top. Format: `YYYY-MM-DD — what landed — branch/PR`._
 
+- 2026-04-10 — **proxy skeleton landed** (`scholarsystem/proxy/`): Bun+Hono workspace member, worker pool with concurrency cap, workspace manager with single-writer locks + TTL sweep + crash recovery, rehydrate-from-blob, 4 session endpoints (files/run-SSE/compile/delete), SSE stream helper, proxy-client on the API server side. Typechecks clean. `@scholarsystem/shared` exports field added.
+- 2026-04-10 — **schema v2 landed in `shared/types/`**: chapter-prefixed `Slug` + new `ChapterId`/`SourceUnitId`, `source` restructured into `chapters[]` with stable numbered `units[]`, `meta.chapters[]` upload history, `sourceRefs.min(1)` on `Concept`/`Subtopic`/`Topic`/`ConceptDetail`/`Relationship`, `narrative` split into frozen `canon` + append-only `arcs[]`, `pipeline.coverageAudit` stage added, `SCHEMA_VERSION` bumped to 2, mutability zones rewritten in `galaxy.ts`. Prior server code under `server/src/pipeline/` + `fixtures/sample-galaxy.ts` + `db/store.ts` will not typecheck against the new shapes — expected, that code is being rewritten in step 3 of the backend revamp
 - 2026-04-10 — backend architecture locked to **workspace-proxy + Obsidian markdown** model: Claude Code operates on per-galaxy workspace directories on a VPS proxy, stages read/write frontmatter+wikilink markdown notes, compile step walks folders into the Galaxy blob. Accuracy guarantee via stable source-unit chunks + mandatory `sourceRefs` citations + pure-code coverage auditor + targeted gap-audit Claude call. Chapter extensions first-class: `meta.chapters[]`, frozen `narrative.canon` + extendable `narrative.arcs[]`, position-locked layout, append-only mutability. Chapter-prefixed slugs enforced in `Slug` Zod schema. Sonnet 4.6 default across Stages 1–5; Opus/Haiku only in Stage 6 via `modelTier`. Supersedes prior spawner + TAB-delimited approach. Context files updated — `.context/`
 - 2026-04-10 — black-hole launch sequence replaces straight-up rocket: 5-phase cinematic (VP slide → entry spiral → steady-state hold ≥3s → shrink → fade) with tunnel-of-stars (radial streaks + inward acceleration + wrap), tangent-aligned spiraling rocket, stage gets sucked into the void via `.launching` scale-down/blur/fade. `parallaxBoost` repurposed as the unified tunnel-intensity knob that now also visibly drives `warp()` and `zoomOut()`/`zoomIn()` — feat/chat-page
 - 2026-04-10 — palette swap: warm purple void → deep cosmic dark navy/black, cooler nebula palette, cool off-white text, refined tagline weight/sizing, more letterspacing on the wordmark — feat/chat-page

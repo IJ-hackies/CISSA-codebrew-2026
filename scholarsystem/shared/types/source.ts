@@ -1,17 +1,17 @@
 import { z } from "zod";
+import { ChapterId, SourceUnitId } from "./ids";
 
-// Provenance of the input. Not the raw input itself — that is discarded
-// after extraction per ABOUT.md. Kept so that debugging a bad pipeline
-// run doesn't require digging through logs to find what went in.
-// "text" = plain-text file upload (.txt)
-// "paste" = inline textarea paste (no file)
-// "markdown" / "pdf" / "docx" / "pptx" = format-specific file uploads,
-// extracted to plain text by the extractor module before Stage 0 sees them.
-// "mixed" = multi-file upload (possibly plus pasted text) concatenated
-//           into a single blob at the route boundary; per-part provenance
-//           lives in `Source.parts`.
-// Widening this enum is non-breaking per SCHEMA.md — existing blobs with
-// kind "text" | "pdf" | "paste" still validate.
+// Provenance of the input plus the stable numbered chunks every
+// downstream artifact cites. Raw uploaded bytes are discarded after
+// extraction; what survives is: (a) enough metadata to debug a bad
+// run and (b) immutable numbered units so the coverage auditor can
+// verify "no content silently dropped" mechanically.
+//
+// A galaxy may ingest many chapters over its lifetime (extensions),
+// so this scope is an array of chapters keyed by ChapterId. Existing
+// chapter entries and their units are immutable once written; new
+// chapters append.
+
 export const SourceKind = z.enum([
   "text",
   "paste",
@@ -22,11 +22,9 @@ export const SourceKind = z.enum([
   "mixed",
 ]);
 
-// Per-part provenance for multi-input uploads. Optional — single-input
-// ingests leave `Source.parts` undefined and keep the top-level
-// `kind`/`filename`/`contentHash` fields as the whole story. When present,
-// every element describes one file (or the inline "paste" pseudo-part)
-// that was concatenated into the final input blob.
+// Per-part provenance for multi-input uploads (e.g. several PDFs
+// concatenated into one chapter ingest). Single-file ingests leave
+// this undefined and let the chapter-level provenance tell the story.
 export const SourcePart = z.object({
   kind: SourceKind,
   filename: z.string().nullable(),
@@ -35,18 +33,41 @@ export const SourcePart = z.object({
   contentHash: z.string(),
 });
 
-export const Source = z.object({
+// A stable numbered chunk of source text. Minted at Stage 0, cited by
+// every derived artifact (knowledge / detail / relationships) via
+// `sourceRefs`. The coverage auditor unions those refs and compares
+// against the full unit set to prove no content was silently dropped.
+//
+// Units are immutable once written. Their ids are deterministic:
+// `<chapter>-s-<4-digit-seq>`, assigned in document order at ingest.
+export const SourceUnit = z.object({
+  id: SourceUnitId,
+  text: z.string(),
+  // Character offsets into the extracted plaintext of the chapter,
+  // for future "jump to source" UX and debugging.
+  charStart: z.number().int().nonnegative(),
+  charEnd: z.number().int().nonnegative(),
+});
+
+// One ingested chapter's worth of provenance + numbered units.
+export const SourceChapter = z.object({
+  id: ChapterId,
   kind: SourceKind,
   filename: z.string().nullable(),
   byteSize: z.number().int().nonnegative(),
   charCount: z.number().int().nonnegative(),
-  contentHash: z.string(), // sha256 hex, enables dedup later
-  excerpt: z.string(),     // first ~500 chars, for debugging only
-  // Populated only for multi-input ("mixed") ingests. Optional field —
-  // adding it is non-breaking; existing blobs parse unchanged.
-  parts: z.array(SourcePart).optional(),
+  contentHash: z.string(), // sha256 hex of the full concatenated input
+  excerpt: z.string(),     // first ~500 chars, debug only
+  parts: z.array(SourcePart).optional(), // populated on "mixed" ingests
+  units: z.array(SourceUnit),
+});
+
+export const Source = z.object({
+  chapters: z.array(SourceChapter),
 });
 
 export type Source = z.infer<typeof Source>;
 export type SourceKind = z.infer<typeof SourceKind>;
 export type SourcePart = z.infer<typeof SourcePart>;
+export type SourceUnit = z.infer<typeof SourceUnit>;
+export type SourceChapter = z.infer<typeof SourceChapter>;
