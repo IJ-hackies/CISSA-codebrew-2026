@@ -3,7 +3,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import GalaxyRenderer from '@/components/GalaxyRenderer.vue'
 import ChatInput from '@/components/ChatInput.vue'
-import SuggestionChips from '@/components/SuggestionChips.vue'
 import DropOverlay from '@/components/DropOverlay.vue'
 import HistoryButton from '@/components/HistoryButton.vue'
 import HistoryOverlay from '@/components/HistoryOverlay.vue'
@@ -11,7 +10,6 @@ import { useIsMobile } from '@/composables/useIsMobile'
 import { useVisualViewport } from '@/composables/useVisualViewport'
 import {
   addRecentGalaxy,
-  hasAnyRecentGalaxies,
   listRecentGalaxies,
   type GalaxyEntry,
 } from '@/lib/recentGalaxies'
@@ -28,7 +26,6 @@ const files = ref<File[]>([])
 const launching = ref(false)
 const launchError = ref<string | null>(null)
 const dropVisible = ref(false)
-const showSuggestions = ref(!hasAnyRecentGalaxies())
 const recents = ref<GalaxyEntry[]>(listRecentGalaxies())
 const historyOpen = ref(false)
 
@@ -134,11 +131,6 @@ onBeforeUnmount(() => {
   inputResizeObserver?.disconnect()
   inputResizeObserver = null
 })
-
-function onPickSuggestion(t: string) {
-  text.value = t
-  chatInputRef.value?.focus()
-}
 
 function openHistory() {
   if (!recents.value.length) return
@@ -281,8 +273,9 @@ async function handleSubmit(origin: { x: number; y: number }) {
     >
       <div class="hero">
         <h1 class="tagline">
-          Turn anything you study<br />into a <strong>galaxy</strong> you can explore.
+          Upload your memories.<br />Every one gets <strong>wrapped</strong>.<br />Explore it as a <strong>galaxy</strong>.
         </h1>
+        <p class="sub-tagline">Journals, notes, PDFs, photos — drop anything.</p>
       </div>
 
       <ChatInput
@@ -294,34 +287,29 @@ async function handleSubmit(origin: { x: number; y: number }) {
       />
 
       <div class="hints">
-        <span><kbd>↵</kbd> launch</span>
+        <span><kbd>↵</kbd> create galaxy</span>
         <span class="dot-sep">·</span>
         <span><kbd>⇧↵</kbd> newline</span>
         <span class="dot-sep">·</span>
         <span>drop files anywhere</span>
       </div>
-
-      <SuggestionChips
-        v-if="showSuggestions && !recents.length && !launching"
-        @pick="onPickSuggestion"
-      />
     </div>
 
-    <!-- Subtle desktop footer — file format vocabulary -->
+    <!-- Format indicator -->
     <div v-if="!isMobile" class="formats-footer" :class="{ hidden: launching || historyOpen }">
-      <span class="formats-label">SUPPORTED</span>
-      <span class="formats-list">PDF · DOCX · PPTX · MD · TXT · RTF · HTML · CSV · JSON · EPUB · TEX · IPYNB</span>
+      <div class="format-icons">
+        <span class="fmt-chip">PDF</span>
+        <span class="fmt-chip">DOCX</span>
+        <span class="fmt-chip">TXT</span>
+        <span class="fmt-chip">MD</span>
+        <span class="fmt-chip">Images</span>
+        <span class="fmt-chip">PPTX</span>
+        <span class="fmt-chip">+ more</span>
+      </div>
     </div>
 
     <!-- ─── Mobile layout: chips floating above, input pinned bottom ── -->
     <template v-if="isMobile">
-      <div
-        v-if="showSuggestions && !recents.length && !launching && !historyOpen"
-        class="mobile-chips-floating"
-      >
-        <SuggestionChips @pick="onPickSuggestion" />
-      </div>
-
       <div class="mobile-input-dock" :class="{ launching, dimmed: historyOpen }">
         <ChatInput
           ref="chatInputRef"
@@ -518,6 +506,15 @@ async function handleSubmit(origin: { x: number; y: number }) {
   opacity: 0.5;
 }
 
+.sub-tagline {
+  font-family: var(--font-ui);
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  letter-spacing: 0.02em;
+  margin: 0;
+  opacity: 0.7;
+}
+
 .formats-footer {
   position: fixed;
   bottom: 28px;
@@ -537,18 +534,22 @@ async function handleSubmit(origin: { x: number; y: number }) {
 .formats-footer.hidden {
   opacity: 0;
 }
-.formats-label {
+.format-icons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.fmt-chip {
   font-size: 0.6rem;
   font-weight: 600;
-  letter-spacing: 0.32em;
-  color: var(--color-accent);
-  opacity: 0.7;
-}
-.formats-list {
-  font-size: 0.66rem;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.1em;
   color: var(--color-text-muted);
-  opacity: 0.55;
+  padding: 3px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 100px;
+  opacity: 0.5;
+  background: rgba(255, 255, 255, 0.02);
 }
 .stage.launching {
   /* Pulled into the black hole — scale toward screen center, fade out. */

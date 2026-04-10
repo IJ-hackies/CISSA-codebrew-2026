@@ -2,19 +2,18 @@
 
 <template>
   <RouterView v-slot="{ Component }">
-    <Transition name="void-fade" mode="out-in">
+    <!-- No mode="out-in" — pages overlap during transition so there's no mount gap.
+         Both pages share the same #02040a background. Nav-veil in each page handles
+         the actual cross-fade so the 3D canvas never goes blank. -->
+    <Transition name="void-fade">
       <component :is="Component" />
     </Transition>
   </RouterView>
 </template>
 
 <style>
-.void-fade-enter-active,
-.void-fade-leave-active {
-  transition: opacity 400ms ease;
-}
-.void-fade-enter-from,
-.void-fade-leave-to {
-  opacity: 0;
-}
+.void-fade-enter-active { transition: opacity 80ms ease; }
+.void-fade-leave-active { transition: opacity 80ms ease; }
+.void-fade-enter-from   { opacity: 0; }
+.void-fade-leave-to     { opacity: 0; }
 </style>
