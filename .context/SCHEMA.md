@@ -2,7 +2,7 @@
 
 The canonical data contract for Scholar System. Everything the pipeline produces, everything the frontend renders, and everything the user's exploration state touches lives inside a single `Galaxy` blob stored as JSON in SQLite, keyed by `meta.id`.
 
-Source of truth: `scholarsystem/shared/types/` (Zod). TypeScript types are derived via `z.infer`.
+Source of truth: `packages/shared/types/` (Zod). TypeScript types are derived via `z.infer`.
 
 ## 7 scopes
 

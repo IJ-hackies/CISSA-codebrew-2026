@@ -84,8 +84,8 @@ The galaxy is a Three.js scene with a force-directed layout. Node appearance is 
 **Frontend.** Vue 3 + Vite + TypeScript, Tailwind v4, Vue Router, Three.js, three-forcegraph (or 3d-force-graph), GSAP.
 
 **Backend.** Bun + Hono + TypeScript:
-- **API server** (`scholarsystem/server/`) — SQLite blob store, pipeline orchestrator, pure-code stages.
-- **Workspace proxy** (`scholarsystem/proxy/`) — Claude Code worker pool, per-galaxy workspaces.
+- **API server** (`apps/server/`) — SQLite blob store, pipeline orchestrator, pure-code stages.
+- **Workspace proxy** (`apps/proxy/`) — Claude Code worker pool, per-galaxy workspaces.
 
 **Shared types** in `shared/` — Zod schemas, single source of truth.
 
@@ -99,7 +99,7 @@ The galaxy is a Three.js scene with a force-directed layout. Node appearance is 
 
 ## Project Structure
 
-- `scholarsystem/client/` — Vue 3 + Three.js frontend
-- `scholarsystem/server/` — Bun + Hono API server, pipeline stages, prompts, compile step
-- `scholarsystem/proxy/` — Workspace manager + Claude Code worker pool (unchanged)
-- `scholarsystem/shared/` — Zod schemas + derived TS types
+- `apps/client/` — Vue 3 + Three.js frontend
+- `apps/server/` — Bun + Hono API server, pipeline stages, prompts, compile step
+- `apps/proxy/` — Workspace manager + Claude Code worker pool
+- `packages/shared/` — Zod schemas + derived TS types

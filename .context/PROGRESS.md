@@ -98,7 +98,7 @@ _Newest at top._
 - 2026-04-11 — Parallel sub-session fan-out for Stage 2 + Stage 5 — `main`
 - 2026-04-10 — Flint-informed extraction pipeline rewrite + Stage 5 visuals — `feat/pipeline-stage5-and-stage12-revamp`
 - 2026-04-10 — Stages 2, 2.5, 3 implemented — `feat/refined-proxy`
-- 2026-04-10 — Proxy skeleton landed — `scholarsystem/proxy/`
+- 2026-04-10 — Proxy skeleton landed — `apps/proxy/`
 - 2026-04-10 — Schema v2 landed — `shared/types/`
 - 2026-04-10 — Chat landing, history, mobile, black-hole launch — `feat/chat-page`
 - 2026-04-10 — Client scaffolded — `feat/chat-page`

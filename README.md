@@ -2,7 +2,7 @@
 
 1. **Get context fast.** Run the `/recontext` skill in Claude Code. It reads the relevant context files. If you don't know anything about this project, run recontext then ask claude
 2. **Read `.context/ABOUT.md` yourself too.** Almost all details about this project and how it works is in there
-3. **`.claude/` and `.context/` live at the repo root.** All actual project code lives inside `scholarsystem/`.
+3. **`.claude/` and `.context/` live at the repo root.** Project code lives in `apps/` and `packages/`.
 4. **When you finish a feature, tell Claude "update progress.md".** `.context/PROGRESS.md` is our living log of what's done across the four pipeline stages. You can also use `/reupdate` which does that too.
 
 ## Prerequisites
@@ -29,11 +29,24 @@ Deliberately **not** using: accounts/auth, Redis, Postgres, S3, AI image gen, We
 ## File structure
 
 ```
-CISSA-codebrew-2026/
+.
 ├── .claude/                  # Claude Code config, skills
 ├── .context/                 # Project context (ABOUT.md — read this)
-└── scholarsystem/            # All project code lives here
-    ├── client/               # Vue 3 frontend (components, composables, lib, types)
-    ├── server/               # Bun + Hono backend (routes, pipeline, prompts, db, lib)
-    └── shared/               # Shared TypeScript types between client & server
+├── apps/
+│   ├── client/               # Vue 3 frontend (components, composables, lib, types)
+│   ├── server/               # Bun + Hono backend (routes, pipeline, prompts, db, lib)
+│   └── proxy/                # Proxy server for Claude Code worker pool (VPS)
+└── packages/
+    └── shared/               # Shared TypeScript types (Zod schemas)
+```
+
+## Running
+
+```bash
+bun install              # install all workspace deps
+bun run dev              # start client + server concurrently
+bun run dev:client       # start client only (port 8888)
+bun run dev:server       # start server only (port 8889)
+bun run dev:proxy        # start proxy only (port 8890)
+bun run build            # build client for production
 ```

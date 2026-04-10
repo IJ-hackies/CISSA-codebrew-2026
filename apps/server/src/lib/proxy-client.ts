@@ -8,7 +8,7 @@ import type { Galaxy } from "@scholarsystem/shared";
  * workspace directories and Claude Code processes on a VPS.
  */
 
-const PROXY_BASE = process.env.PROXY_URL ?? "http://localhost:4100";
+const PROXY_BASE = process.env.PROXY_URL ?? "http://localhost:8890";
 
 // ─── POST /session/:id/files ──────────────────────────────────────
 

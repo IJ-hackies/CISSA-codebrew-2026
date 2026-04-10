@@ -14,12 +14,12 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: 8888,
     proxy: {
       // Forward API calls to the Bun backend in dev so the frontend can use
-      // relative URLs and nothing hardcodes localhost:3000.
+      // relative URLs and nothing hardcodes localhost:8889.
       '/api': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:8889',
         changeOrigin: true,
       },
     },

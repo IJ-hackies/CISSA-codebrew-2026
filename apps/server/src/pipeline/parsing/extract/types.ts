@@ -1,6 +1,6 @@
 // Shared types for the extractor module.
 
-import type { SourceKind } from "../../../../../shared/types";
+import type { SourceKind } from "@scholarsystem/shared";
 
 export interface Extracted {
   /** Plain-text (or markdown) content ready to feed into Stage 0. */

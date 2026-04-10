@@ -17,7 +17,7 @@ app.get("/api/health", (c) => c.json({ ok: true, service: "scholarsystem" }));
 
 app.route("/api/galaxy", galaxyRoutes);
 
-const port = Number(process.env.PORT ?? 3000);
+const port = Number(process.env.PORT ?? 8889);
 console.log(`[server] listening on http://localhost:${port}`);
 
 export default {

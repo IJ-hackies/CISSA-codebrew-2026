@@ -10,7 +10,7 @@
 // now we emit a single unit per chapter so the schema validates.
 
 import { createHash, randomUUID } from "node:crypto";
-import { Galaxy, SourceKind, SourcePart } from "../../../../shared/types";
+import { Galaxy, SourceKind, SourcePart } from "@scholarsystem/shared";
 import { createEmptyGalaxy, stageStart, stageDone } from "../../lib/blob";
 
 export interface IngestInput {

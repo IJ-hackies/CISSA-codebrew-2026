@@ -10,7 +10,7 @@
     "allowImportingTsExtensions": false,
     "noEmit": true,
     "paths": {
-      "@scholarsystem/shared": ["../shared/types/index.ts"]
+      "@scholarsystem/shared": ["../../packages/shared/types/index.ts"]
     }
   },
   "include": ["src/**/*"]

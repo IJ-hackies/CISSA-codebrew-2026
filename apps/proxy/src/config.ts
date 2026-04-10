@@ -7,7 +7,7 @@
 
 export const config = {
   /** Port the proxy listens on. */
-  port: Number(process.env.PROXY_PORT ?? 4100),
+  port: Number(process.env.PROXY_PORT ?? 8890),
 
   /** Root directory for per-galaxy workspaces. */
   workspacesDir: process.env.WORKSPACES_DIR ?? "./workspaces",

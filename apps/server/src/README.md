@@ -54,13 +54,13 @@ src/
 - Adding a shared helper (hashing, parallelism, spawning Claude) → `lib/`
 - Storing or loading a galaxy from SQLite → `db/`
 
-**"Where does the Galaxy type live?"** — `../../shared/types/`. Every file in the pipeline validates its output against the Zod schema there before writing to the blob. Never hand-write types that duplicate those schemas.
+**"Where does the Galaxy type live?"** — `packages/shared/types/` (imported as `@scholarsystem/shared`). Every file in the pipeline validates its output against the Zod schema there before writing to the blob. Never hand-write types that duplicate those schemas.
 
 **"Where does the pipeline stage order come from?"** — see `pipeline/README.md` and `.context/SCHEMA.md` at the repo root. The stage order is load-bearing: Stage 3 (narrative) blocks on Stage 2 (detail), Stage 4 (layout) runs in parallel with Stage 3, etc.
 
 ## Running the server
 
-`scholarsystem/` is a Bun workspace root, so dependencies install from the top (not from inside `server/`). This lets `shared/` resolve its own `zod` out of the hoisted root `node_modules`.
+The repo root is a Bun workspace, so dependencies install from the top (not from inside `apps/server/`). This lets `packages/shared/` resolve its own `zod` out of the hoisted root `node_modules`.
 
 ```bash
 cd scholarsystem
@@ -70,5 +70,5 @@ bun run dev                        # watch mode on :3000
 bun run test:spawner "hello"       # smoke test the Claude spawner
 ```
 
-Health check: `GET http://localhost:3000/api/health`
-Fixture galaxy: `GET http://localhost:3000/api/galaxy/anything`
+Health check: `GET http://localhost:8889/api/health`
+Fixture galaxy: `GET http://localhost:8889/api/galaxy/anything`

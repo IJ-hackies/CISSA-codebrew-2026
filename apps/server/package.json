@@ -9,6 +9,7 @@
     "test:pipeline": "bun run src/scripts/test-pipeline.ts"
   },
   "dependencies": {
+    "@scholarsystem/shared": "workspace:*",
     "@anthropic-ai/sdk": "^0.87.0",
     "gray-matter": "^4.0.3",
     "hono": "^4.6.0",

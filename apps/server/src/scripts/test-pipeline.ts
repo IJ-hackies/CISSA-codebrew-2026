@@ -11,7 +11,7 @@
 //   3. Prints a human summary + the full validated Galaxy JSON
 //   4. Persists the galaxy to SQLite so you can fetch it via the HTTP route
 //
-// Requires the proxy server to be running on localhost:4100.
+// Requires the proxy server to be running on localhost:8890.
 // Exits non-zero on any stage failure so CI can rely on it.
 
 import { runPipeline, sanitizeChapterId } from "../pipeline/runner";
@@ -68,7 +68,7 @@ async function main() {
     console.log(`[test-pipeline] extracted ${pageImages.length} page images for vision`);
   }
   console.log(`[test-pipeline] running chunk → structure → wraps → coverage...`);
-  console.log(`[test-pipeline] (requires proxy on localhost:4100)`);
+  console.log(`[test-pipeline] (requires proxy on localhost:8890)`);
 
   const started = Date.now();
   const galaxy = await runPipeline(

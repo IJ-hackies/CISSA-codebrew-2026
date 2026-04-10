@@ -11,7 +11,7 @@
 //   3. Add a dispatch case below.
 //   4. Mirror the extension in `client/src/lib/fileTypes.ts`.
 
-import type { SourceKind } from "../../../../../shared/types";
+import type { SourceKind } from "@scholarsystem/shared";
 import type { Extracted } from "./types";
 import { EXTENSION_TO_KIND, UnsupportedFormatError } from "./types";
 import { extractMarkdown } from "./markdown";

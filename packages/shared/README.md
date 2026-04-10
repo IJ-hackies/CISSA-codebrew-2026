@@ -41,7 +41,7 @@ const k: Knowledge = parsed.knowledge!;
 import { Galaxy, type Galaxy as GalaxyType } from "../../shared/types";
 ```
 
-Both sides import directly from this folder via relative paths — no build step, no npm link needed. `shared/` is a Bun workspace member of the `scholarsystem/` root, so `zod` is hoisted into `scholarsystem/node_modules` and resolves for both `server/` and `shared/` automatically. Run `bun install` from `scholarsystem/` (not from `server/`) to set it up.
+Both sides import via `@scholarsystem/shared` — no build step, no npm link needed. `packages/shared/` is a Bun workspace member of the monorepo root, so `zod` is hoisted into the root `node_modules` and resolves for both `server/` and `shared/` automatically. Run `bun install` from the repo root to set it up.
 
 ## Rules
 

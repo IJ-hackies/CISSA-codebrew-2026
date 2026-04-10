@@ -9,7 +9,7 @@
 // ./scholarsystem.db relative to the server's CWD.
 
 import { Database } from "bun:sqlite";
-import { Galaxy } from "../../../shared/types";
+import { Galaxy } from "@scholarsystem/shared";
 
 const dbPath = process.env.SCHOLARSYSTEM_DB ?? "scholarsystem.db";
 
