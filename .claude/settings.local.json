@@ -39,7 +39,9 @@
       "Bash(npx vue-tsc:*)",
       "Bash(node_modules/.bin/tsc --project server/tsconfig.json --noEmit)",
       "Bash(bun x:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(bun tsc:*)",
+      "Bash(claude -p --dangerously-skip-permissions --model haiku)"
     ]
   }
 }

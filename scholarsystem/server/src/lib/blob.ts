@@ -5,26 +5,27 @@
 // extract JSON from a raw Claude response (any stage that calls the model).
 // Centralising them here keeps stage files focused on their actual work.
 
-import { Galaxy, SCHEMA_VERSION, StageState, Pipeline } from "../../../shared/types";
+import {
+  Galaxy,
+  SCHEMA_VERSION,
+  type StageState,
+  type Pipeline,
+} from "@scholarsystem/shared";
 
 // ───────── Empty blob factory ─────────
 
 const emptyStage = (): StageState => ({
   status: "pending",
-  progress: 0,
   startedAt: null,
-  finishedAt: null,
+  completedAt: null,
   error: null,
 });
 
 const emptyPipeline = (): Pipeline => ({
   ingest: emptyStage(),
   structure: emptyStage(),
-  detail: emptyStage(),
-  coverageAudit: emptyStage(),
-  narrative: emptyStage(),
-  layout: emptyStage(),
-  visuals: emptyStage(),
+  wraps: emptyStage(),
+  coverage: emptyStage(),
 });
 
 export interface EmptyGalaxyInput {
@@ -49,19 +50,11 @@ export function createEmptyGalaxy(input: EmptyGalaxyInput): Galaxy {
     },
     source: input.source,
     knowledge: null,
-    detail: {},
-    relationships: [],
-    narrative: { canon: null, arcs: [] },
-    spatial: null,
-    visuals: {},
-    scenes: {},
-    conversations: {},
-    progress: {
-      bodies: {},
-      totalBodies: 0,
-      visitedCount: 0,
-      completedCount: 0,
-      overallMastery: 0,
+    relationships: { edges: [] },
+    wraps: {},
+    exploration: {
+      visited: {},
+      bookmarked: [],
     },
     pipeline: emptyPipeline(),
   };
@@ -71,28 +64,25 @@ export function createEmptyGalaxy(input: EmptyGalaxyInput): Galaxy {
 
 // ───────── Stage status transitions ─────────
 
-type StageName = keyof Pipeline;
+export type StageName = keyof Pipeline;
 
 /** Mark a stage `running` and stamp `startedAt`. Mutates in place. */
 export function stageStart(galaxy: Galaxy, stage: StageName): void {
   galaxy.pipeline[stage] = {
-    ...galaxy.pipeline[stage],
     status: "running",
-    progress: 0,
     startedAt: Date.now(),
-    finishedAt: null,
+    completedAt: null,
     error: null,
   };
   galaxy.meta.updatedAt = Date.now();
 }
 
-/** Mark a stage `done` with full progress. Mutates in place. */
+/** Mark a stage `complete`. Mutates in place. */
 export function stageDone(galaxy: Galaxy, stage: StageName): void {
   galaxy.pipeline[stage] = {
     ...galaxy.pipeline[stage],
-    status: "done",
-    progress: 1,
-    finishedAt: Date.now(),
+    status: "complete",
+    completedAt: Date.now(),
     error: null,
   };
   galaxy.meta.updatedAt = Date.now();
@@ -103,7 +93,7 @@ export function stageError(galaxy: Galaxy, stage: StageName, message: string): v
   galaxy.pipeline[stage] = {
     ...galaxy.pipeline[stage],
     status: "error",
-    finishedAt: Date.now(),
+    completedAt: Date.now(),
     error: message,
   };
   galaxy.meta.updatedAt = Date.now();

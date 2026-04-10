@@ -1,32 +1,32 @@
 // Stage 2.5: Coverage Audit.
 //
 // The accuracy backstop. Pure-code pass computes which source units
-// are NOT cited by any knowledge node or detail entry, then a targeted
+// are NOT cited by any knowledge node or wrap, then a targeted
 // Claude call via the proxy decides what to do with each uncited unit:
-//   - attach to an existing concept (add sourceRefs)
-//   - create a new concept (gap concept)
+//   - attach to an existing entry (add sourceRefs + derivative)
+//   - create a new entry (gap entry, becomes an asteroid)
 //   - justify as non-knowledge-bearing (formatting, redundant, etc.)
 //
 // Loops at most MAX_ROUNDS times until coverage meets threshold.
 // The gap-audit Claude call is intentionally small-input (only the
-// uncited passages + existing concept list) — don't cheap out on the
+// uncited passages + existing entry list) — don't cheap out on the
 // model tier here, this is the accuracy guarantee.
 
 import type {
   Galaxy,
-  Knowledge,
-  Concept,
-  ConceptDetail,
-  Derivative,
+  Entry,
   Slug,
   ChapterId,
+  EntryKind,
 } from "@scholarsystem/shared";
 import { stageStart, stageDone, stageError } from "../lib/blob";
 import { pushFiles, runStage, compileFiles } from "../lib/proxy-client";
-import { parseNote, extractDerivatives } from "./compile/frontmatter";
+import { parseNote } from "./compile/frontmatter";
+import { asStringArray, coerceEnum } from "./compile";
+import { EntryKind as EntryKindSchema } from "@scholarsystem/shared";
 
 const MAX_ROUNDS = 3;
-const COVERAGE_THRESHOLD = 0.95; // 95% of source words must be covered
+const COVERAGE_THRESHOLD = 0.95; // 95% of source units must be cited
 
 // ───────── Word-level coverage ─────────
 
@@ -187,14 +187,13 @@ export async function runCoverageAudit(galaxy: Galaxy): Promise<Galaxy> {
     throw new Error("runCoverageAudit: galaxy.knowledge is null");
   }
 
-  stageStart(galaxy, "coverageAudit");
+  stageStart(galaxy, "coverage");
 
   try {
     const chapter = galaxy.source.chapters[galaxy.source.chapters.length - 1];
-    if (!chapter) throw new Error("coverageAudit: no source chapters");
+    if (!chapter) throw new Error("coverage: no source chapters");
 
     const unitTextById = new Map(chapter.units.map((u) => [u.id, u.text]));
-
     const allUnitIds = new Set(chapter.units.map((u) => u.id));
 
     let round = 0;
@@ -208,11 +207,11 @@ export async function runCoverageAudit(galaxy: Galaxy): Promise<Galaxy> {
         ? (allUnitIds.size - uncitedUnits.length) / allUnitIds.size
         : 1;
 
-      // ── Supplementary: word-level coverage from derivatives ──
+      // ── Supplementary: word-level coverage from wrap derivatives ──
       const allDerivatives: { sourceRef: string; quote: string }[] = [];
-      for (const entry of Object.values(galaxy.detail)) {
-        if (entry && "derivatives" in entry) {
-          for (const d of (entry as ConceptDetail).derivatives) {
+      for (const wrap of Object.values(galaxy.wraps)) {
+        if (wrap && "derivatives" in wrap) {
+          for (const d of wrap.derivatives) {
             allDerivatives.push({ sourceRef: d.sourceRef, quote: d.quote });
           }
         }
@@ -236,16 +235,15 @@ export async function runCoverageAudit(galaxy: Galaxy): Promise<Galaxy> {
         .map((id) => `### ${id}\n${unitTextById.get(id) ?? "(text not found)"}`)
         .join("\n\n");
 
-      const existingConcepts = galaxy.knowledge.concepts
-        .map((c) => `- ${c.id}: "${c.title}" — ${c.brief}`)
+      const existingEntries = galaxy.knowledge.entries
+        .map((e) => `- ${e.id} [${e.kind}]: "${e.title}" — ${e.brief}`)
         .join("\n");
 
       const prompt = buildGapAuditPrompt({
         chapterId: chapter.id,
         uncitedPassages,
-        existingConcepts,
+        existingEntries,
         uncitedIds: uncitedUnits,
-        sourceUnitIds: chapter.units.map((u) => u.id),
       });
 
       // Push the uncited passages as a reference file, then run the audit.
@@ -263,17 +261,17 @@ export async function runCoverageAudit(galaxy: Galaxy): Promise<Galaxy> {
         break;
       }
 
-      // Compile workspace files to pick up any new concepts or updated sourceRefs.
+      // Compile workspace files to pick up any new entries or updated sourceRefs.
       const files = await compileFiles(galaxy.meta.id);
       applyGapAuditResults(galaxy, files, round);
     }
 
-    stageDone(galaxy, "coverageAudit");
+    stageDone(galaxy, "coverage");
     return galaxy;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`[coverage] audit failed: ${message}`);
-    stageError(galaxy, "coverageAudit", message);
+    stageError(galaxy, "coverage", message);
     return galaxy;
   }
 }
@@ -284,25 +282,30 @@ function collectCitedUnits(galaxy: Galaxy): Set<string> {
   const cited = new Set<string>();
 
   if (galaxy.knowledge) {
-    for (const t of galaxy.knowledge.topics) {
-      for (const ref of t.sourceRefs) cited.add(ref);
-    }
-    for (const s of galaxy.knowledge.subtopics) {
-      for (const ref of s.sourceRefs) cited.add(ref);
-    }
-    for (const c of galaxy.knowledge.concepts) {
+    for (const c of galaxy.knowledge.clusters) {
       for (const ref of c.sourceRefs) cited.add(ref);
     }
-  }
-
-  for (const entry of Object.values(galaxy.detail)) {
-    if (entry && "sourceRefs" in entry) {
-      for (const ref of (entry as ConceptDetail).sourceRefs) cited.add(ref);
+    for (const g of galaxy.knowledge.groups) {
+      for (const ref of g.sourceRefs) cited.add(ref);
+    }
+    for (const e of galaxy.knowledge.entries) {
+      for (const ref of e.sourceRefs) cited.add(ref);
     }
   }
 
-  for (const rel of galaxy.relationships) {
-    for (const ref of rel.sourceRefs) cited.add(ref);
+  // Wraps carry derivatives which reference source units.
+  for (const wrap of Object.values(galaxy.wraps)) {
+    if (wrap && "sourceRefs" in wrap) {
+      for (const ref of wrap.sourceRefs) cited.add(ref);
+    }
+    if (wrap && "derivatives" in wrap) {
+      for (const d of wrap.derivatives) cited.add(d.sourceRef);
+    }
+  }
+
+  // Relationship edges also carry sourceRefs.
+  for (const edge of galaxy.relationships.edges) {
+    for (const ref of edge.sourceRefs) cited.add(ref);
   }
 
   return cited;
@@ -313,38 +316,37 @@ function collectCitedUnits(galaxy: Galaxy): Set<string> {
 interface GapAuditPromptInput {
   chapterId: string;
   uncitedPassages: string;
-  existingConcepts: string;
+  existingEntries: string;
   uncitedIds: string[];
-  sourceUnitIds: string[];
 }
 
 function buildGapAuditPrompt(input: GapAuditPromptInput): string {
-  const { chapterId, uncitedPassages, existingConcepts, uncitedIds } = input;
+  const { chapterId, uncitedPassages, existingEntries, uncitedIds } = input;
 
-  return `You are an accuracy auditor for an educational content pipeline. Some source units were NOT cited by any knowledge node or detail entry. Your job is to close these gaps.
+  return `You are an accuracy auditor for a Memory Galaxy pipeline. Some source units were NOT cited by any knowledge node or wrap. Your job is to close these gaps.
 
 ## Context
 
-The following source units are uncited — no concept, topic, subtopic, or detail entry references them:
+The following source units are uncited — no cluster, group, entry, or wrap references them:
 
 ${uncitedPassages}
 
-## Existing concepts
+## Existing entries
 
-${existingConcepts}
+${existingEntries}
 
 ## Your task
 
 For EACH uncited source unit, do ONE of:
 
-### Option A: Attach to an existing concept
-If the uncited passage is covered by an existing concept, write a file to update that concept's citations. Include a verbatim derivative quote so coverage can be verified at word level:
+### Option A: Attach to an existing entry
+If the uncited passage is covered by an existing entry, write a file to update that entry's citations. Include a verbatim derivative quote:
 
-\`stage2-coverage/${chapterId}-attach-<concept-id>.md\`:
+\`stage2-coverage/${chapterId}-attach-<entry-id>.md\`:
 \`\`\`yaml
 ---
 action: attach
-conceptId: <existing-concept-id>
+entryId: <existing-entry-id>
 addSourceRefs: [${chapterId}-s-NNNN, ...]
 derivatives:
   - sourceRef: ${chapterId}-s-NNNN
@@ -352,42 +354,50 @@ derivatives:
 ---
 \`\`\`
 
-### Option B: Create a new concept
-If the uncited passage contains knowledge that doesn't fit any existing concept, create a new concept file:
+### Option B: Create a new entry
+If the uncited passage contains content that doesn't fit any existing entry, create a new entry (it becomes a loose asteroid in the galaxy):
 
 \`stage2-coverage/${chapterId}-gap-<new-slug>.md\`:
 \`\`\`yaml
 ---
-action: new-concept
+action: new-entry
 id: ${chapterId}-<kebab-slug>
 chapter: ${chapterId}
-type: concept
-kind: <definition|formula|example|fact|principle|process|framework|trade-off|distinction|paradigm|property>
-modelTier: <light|standard|heavy>
+kind: <moment|person|place|theme|artifact|milestone|period>
 title: <string>
-brief: <1-2 sentence hook>
+brief: <1-2 sentence description, ≤30 words>
 sourceRefs: [${chapterId}-s-NNNN, ...]
 ---
 \`\`\`
 
-### Option C: Justify as non-knowledge-bearing
-If the passage is formatting, boilerplate, redundant repetition, or genuinely contains no learnable content:
+### Option C: Justify as non-content
+If the passage is formatting, boilerplate, redundant repetition, or genuinely contains no meaningful content:
 
 \`stage2-coverage/${chapterId}-skip-<unit-id>.md\`:
 \`\`\`yaml
 ---
 action: skip
 unitId: ${chapterId}-s-NNNN
-reason: <brief justification why this unit contains no knowledge>
+reason: <brief justification why this unit contains no meaningful content>
 ---
 \`\`\`
+
+## Entry kind guide (for Option B)
+
+- \`moment\` — a specific event, memory, or experience
+- \`person\` — a person, character, or relationship
+- \`place\` — a location, setting, or environment
+- \`theme\` — a recurring idea, pattern, or motif
+- \`artifact\` — a specific object, document, photo, or creation
+- \`milestone\` — a turning point, achievement, or pivotal moment
+- \`period\` — a time span, era, or phase of life
 
 ## Rules
 
 1. Every uncited unit (${uncitedIds.length} total) must be addressed by exactly one file.
-2. New concept ids MUST start with \`${chapterId}-\`.
+2. New entry ids MUST start with \`${chapterId}-\`.
 3. \`sourceRefs\` must reference real source unit ids.
-4. Prefer Option A (attach) when the content is already covered. Prefer Option C only when the passage genuinely has no learnable content. Option B is for real gaps.
+4. Prefer Option A (attach) when the content is already covered. Prefer Option C only when the passage genuinely has no meaningful content. Option B is for real gaps.
 5. Do NOT modify any existing files — only create new files under \`stage2-coverage/\`.
 
 Now audit the uncited passages and create the appropriate files.`;
@@ -417,27 +427,27 @@ function applyGapAuditResults(
 
       switch (action) {
         case "attach": {
-          const conceptId = note.data.conceptId as string;
+          const entryId = note.data.entryId as string;
           const addRefs = asStringArray(note.data.addSourceRefs);
 
-          // Update knowledge concept sourceRefs.
-          const concept = galaxy.knowledge!.concepts.find((c) => c.id === conceptId);
-          if (concept && addRefs.length > 0) {
-            const existing = new Set(concept.sourceRefs);
+          // Update knowledge entry sourceRefs.
+          const entry = galaxy.knowledge!.entries.find((e) => e.id === entryId);
+          if (entry && addRefs.length > 0) {
+            const existing = new Set(entry.sourceRefs);
             for (const ref of addRefs) {
               if (!existing.has(ref)) {
-                concept.sourceRefs.push(ref as Slug);
+                entry.sourceRefs.push(ref as Slug);
               }
             }
           }
 
-          // Update detail sourceRefs and derivatives if detail exists.
-          const detail = galaxy.detail[conceptId];
-          if (detail && addRefs.length > 0) {
-            const existing = new Set(detail.sourceRefs);
+          // Update wrap derivatives if wrap exists.
+          const wrap = galaxy.wraps[entryId];
+          if (wrap && addRefs.length > 0) {
+            const existingRefs = new Set(wrap.sourceRefs);
             for (const ref of addRefs) {
-              if (!existing.has(ref)) {
-                detail.sourceRefs.push(ref as Slug);
+              if (!existingRefs.has(ref)) {
+                wrap.sourceRefs.push(ref as Slug);
               }
             }
 
@@ -446,11 +456,10 @@ function applyGapAuditResults(
             if (Array.isArray(newDerivatives)) {
               for (const d of newDerivatives) {
                 if (d && typeof d === "object" && "sourceRef" in d && "quote" in d) {
-                  detail.derivatives.push({
+                  wrap.derivatives.push({
                     sourceRef: String(d.sourceRef) as Slug,
                     quote: String(d.quote),
                   });
-                  detail.sourceQuotes.push(String(d.quote));
                 }
               }
             }
@@ -460,25 +469,30 @@ function applyGapAuditResults(
           break;
         }
 
-        case "new-concept": {
+        case "new-entry": {
           const id = note.data.id as string;
           if (!id) break;
 
-          // Add to knowledge.concepts as a loose concept.
-          const newConcept: Concept = {
+          const kind = coerceEnum(
+            note.data.kind,
+            EntryKindSchema.options,
+            "moment",
+          );
+
+          // Add to knowledge.entries as a loose entry (asteroid).
+          const newEntry: Entry = {
             id: id as Slug,
             chapter: (note.data.chapter ?? galaxy.source.chapters[0].id) as ChapterId,
             title: (note.data.title as string) ?? id,
-            kind: (note.data.kind as Concept["kind"]) ?? "fact",
+            kind: kind as EntryKind,
             brief: (note.data.brief as string) ?? "",
-            modelTier: (note.data.modelTier as Concept["modelTier"]) ?? "light",
             sourceRefs: asStringArray(note.data.sourceRefs) as Slug[],
+            groupId: null, // loose = asteroid
           };
 
           // Only add if not already present.
-          if (!galaxy.knowledge!.concepts.some((c) => c.id === id)) {
-            galaxy.knowledge!.concepts.push(newConcept);
-            galaxy.knowledge!.looseConceptIds.push(id as Slug);
+          if (!galaxy.knowledge!.entries.some((e) => e.id === id)) {
+            galaxy.knowledge!.entries.push(newEntry);
           }
 
           created++;
@@ -496,12 +510,6 @@ function applyGapAuditResults(
   }
 
   console.log(
-    `[coverage] round ${round} results: ${attached} attached, ${created} new concepts, ${skipped} skipped`,
+    `[coverage] round ${round} results: ${attached} attached, ${created} new entries, ${skipped} skipped`,
   );
-}
-
-function asStringArray(val: unknown): string[] {
-  if (Array.isArray(val)) return val.map(String);
-  if (typeof val === "string") return [val];
-  return [];
 }

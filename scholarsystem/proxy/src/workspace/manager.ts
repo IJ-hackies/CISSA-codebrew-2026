@@ -8,9 +8,7 @@ import { config } from "../config";
 const STAGE_DIRS = [
   "sources",
   "stage1-structure",
-  "stage2-detail",
-  "stage3-narrative",
-  "stage5-visuals",
+  "stage2-wraps",
 ] as const;
 
 export interface WorkspaceInfo {
@@ -74,7 +72,25 @@ export function touchWorkspace(galaxyId: string): void {
 /** Delete a workspace from disk and the registry. */
 export async function destroyWorkspace(galaxyId: string): Promise<void> {
   const dir = workspaceDir(galaxyId);
-  await rm(dir, { recursive: true, force: true });
+
+  // On Windows, Claude Code subprocesses may still hold file handles
+  // briefly after exit. Retry with backoff to avoid EBUSY failures.
+  const MAX_RETRIES = 4;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      await rm(dir, { recursive: true, force: true });
+      break;
+    } catch (err: any) {
+      if (err?.code === "EBUSY" && attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+        continue;
+      }
+      // Non-EBUSY or exhausted retries — log and move on.
+      console.warn(`[workspace] rm failed for ${galaxyId}: ${err?.message}`);
+      break;
+    }
+  }
+
   workspaces.delete(galaxyId);
   writeLocks.delete(galaxyId);
 }

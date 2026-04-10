@@ -37,9 +37,13 @@ function buildArgs(req: RunRequest): string[] {
   //   without interactive approval. Required because Claude Code in
   //   print mode with tool access is how the pipeline writes files
   //   into the workspace stage folders.
+  //
+  // The prompt is piped via stdin (not as a -p argument) to avoid
+  // Windows command-line length limits (~32K chars). `claude -p` with
+  // no inline prompt reads from stdin automatically.
   const model = req.model ?? config.defaultModel;
   const args = [
-    "-p", req.prompt,
+    "-p",
     "--dangerously-skip-permissions",
     "--model", model,
   ];
@@ -54,9 +58,14 @@ export async function runClaudeCode(req: RunRequest): Promise<RunResult> {
 
   const proc = Bun.spawn(["claude", ...buildArgs(req)], {
     cwd: req.cwd,
+    stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
   });
+
+  // Write prompt via stdin to avoid Windows command-line length limits.
+  proc.stdin.write(req.prompt);
+  proc.stdin.end();
 
   if (req.signal) {
     req.signal.addEventListener("abort", () => proc.kill(), { once: true });
@@ -90,9 +99,14 @@ export async function runClaudeCodeStreaming(
 
   const proc = Bun.spawn(["claude", ...buildArgs(req)], {
     cwd: req.cwd,
+    stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
   });
+
+  // Write prompt via stdin to avoid Windows command-line length limits.
+  proc.stdin.write(req.prompt);
+  proc.stdin.end();
 
   if (req.signal) {
     req.signal.addEventListener("abort", () => proc.kill(), { once: true });

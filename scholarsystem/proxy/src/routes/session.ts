@@ -108,6 +108,7 @@ sessionRoutes.post("/:id/run", async (c) => {
         ok: result.ok,
         exitCode: result.exitCode,
         durationMs: result.durationMs,
+        stderr: result.stderr || undefined,
       });
     } catch (err) {
       send("error", {

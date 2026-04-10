@@ -50,14 +50,21 @@ export async function runStage(opts: RunStageOptions): Promise<{
   ok: boolean;
   exitCode: number;
   durationMs: number;
+  stderr?: string;
 }> {
+  // Claude Code sessions can run for many minutes on large inputs.
+  // Bun's default fetch timeout (300s) is too short — use 30 min for
+  // the SSE stream, but let the caller override via opts.signal.
+  const signal =
+    opts.signal ?? AbortSignal.timeout(30 * 60 * 1000);
+
   const res = await fetch(
     `${PROXY_BASE}/session/${opts.galaxyId}/run`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt: opts.prompt, model: opts.model }),
-      signal: opts.signal,
+      signal,
     },
   );
 
@@ -236,7 +243,8 @@ export async function fanOutSubSessions(
       };
     } finally {
       // 4. Clean up the sub-session workspace (best-effort).
-      destroySession(task.sessionId).catch(() => {});
+      // Small delay lets Windows release file handles from the claude subprocess.
+      setTimeout(() => destroySession(task.sessionId).catch(() => {}), 1000);
     }
   }
 
