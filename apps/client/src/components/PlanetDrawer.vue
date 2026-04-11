@@ -32,7 +32,7 @@
           <div class="footer-count">{{ planet.planetConnections.length }}</div>
         </div>
         <div class="connections-scroller">
-          <div class="connections">
+          <div class="connections" @wheel.prevent="(e) => (e.currentTarget as HTMLElement).scrollLeft += e.deltaY">
             <button
               v-for="cid in planet.planetConnections"
               :key="cid"

@@ -234,9 +234,6 @@ async function handleSubmit() {
     transitioning.value = true
     await new Promise((r) => setTimeout(r, 450))
 
-    // Store the full blob so GalaxyMap can read it without re-fetching.
-    if (galaxy) setGalaxy(galaxy as Galaxy)
-
     const entry: GalaxyEntry = {
       uuid: galaxy.id,
       title: galaxy.title,

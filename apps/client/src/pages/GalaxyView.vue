@@ -924,7 +924,11 @@ const { triggerWarp } = useWarpEffect()
 
 onMounted(async () => {
   const gid = (route.params.id as string) ?? 'fixture'
-  await loadFromApi(gid)
+  // Skip the fetch if the store already holds data for this galaxy (e.g. returning from SolarSystemView).
+  if (!meshData.value || galaxyId.value !== gid) {
+    await loadFromApi(gid)
+  }
+  loading.value = false
   // Record the very first galaxy the user ever visits
   if (!localStorage.getItem(FIRST_GALAXY_KEY)) {
     localStorage.setItem(FIRST_GALAXY_KEY, gid)
@@ -960,7 +964,6 @@ onMounted(async () => {
   }
 
   buildGraph()
-  loading.value = false
 
   // Arrival: fade veil out — slower when coming fresh from ChatLanding so the
   // galaxy emerges cinematically rather than popping in.

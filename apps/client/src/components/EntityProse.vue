@@ -111,7 +111,6 @@ function onClick(e: MouseEvent) {
   background: rgba(170, 200, 255, 0.18);
 }
 .section-body :deep(.wikilink-broken) {
-  color: rgba(255, 255, 255, 0.35);
-  text-decoration: line-through;
+  color: inherit;
 }
 </style>

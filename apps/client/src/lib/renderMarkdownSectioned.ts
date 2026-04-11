@@ -34,6 +34,23 @@ function escape(s: string): string {
  * Leaves block-level structure alone.
  */
 function renderInline(md: string, wikiLinkIndex: WikiLinkIndex): string {
+  // Build a lowercase fallback index once for case-insensitive resolution
+  const lowerIndex: Record<string, string> = {}
+  for (const [k, v] of Object.entries(wikiLinkIndex)) {
+    lowerIndex[k.toLowerCase()] = v
+  }
+
+  function resolveWikiKey(raw: string): { uuid: string; key: string } | null {
+    // Normalize: collapse internal whitespace, strip path prefix
+    const normalized = (raw.includes('/') ? raw.split('/').pop()! : raw)
+      .replace(/\s+/g, ' ').trim()
+    const direct = wikiLinkIndex[normalized]
+    if (direct) return { uuid: direct, key: normalized }
+    const lower = lowerIndex[normalized.toLowerCase()]
+    if (lower) return { uuid: lower, key: normalized }
+    return null
+  }
+
   // Image embeds first (so [[...]] pass doesn't eat them)
   let out = md.replace(/!\[\[([^\]]+)\]\]/g, (_m, filename: string) => {
     const safe = encodeURIComponent(filename)
@@ -42,13 +59,13 @@ function renderInline(md: string, wikiLinkIndex: WikiLinkIndex): string {
 
   // Wikilinks
   out = out.replace(/\[\[([^\]]+)\]\]/g, (_m, name: string) => {
-    const key = name.includes('/') ? name.split('/').pop()! : name
-    const uuid = wikiLinkIndex[key]
+    const resolved = resolveWikiKey(name)
+    const key = (name.includes('/') ? name.split('/').pop()! : name).replace(/\s+/g, ' ').trim()
     const label = key.replace(/^\([^)]+\)\s*/, '')
-    if (!uuid) return `<span class="wikilink-broken">${escape(label)}</span>`
+    if (!resolved) return `<span class="wikilink-broken">${escape(label)}</span>`
     const typeMatch = key.match(/^\((\w[\w ]*)\)/)
     const type = typeMatch?.[1]?.toLowerCase().replace(/\s+/g, '-') ?? 'unknown'
-    return `<a data-id="${uuid}" data-type="${type}" class="wikilink">${escape(label)}</a>`
+    return `<a data-id="${resolved.uuid}" data-type="${type}" class="wikilink">${escape(label)}</a>`
   })
 
   // Inline: bold, italic, code

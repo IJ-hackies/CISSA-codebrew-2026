@@ -1,6 +1,5 @@
 <template>
   <div class="solar-view" ref="containerRef">
-
     <!-- Back button -->
     <button class="back-btn" @click="navigateBack" aria-label="Back to galaxy">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -986,6 +985,14 @@ function buildScene() {
   sunParticle.userData.clearable = true
   scene.add(sunParticle)
 
+  // Invisible hit-sphere so the sun is clickable (Points objects aren't raycasted by default)
+  const sunHitGeo  = new THREE.SphereGeometry(SUN_R * 1.1, 16, 16)
+  const sunHitMat  = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })
+  const sunHitMesh = new THREE.Mesh(sunHitGeo, sunHitMat)
+  sunHitMesh.userData = { clearable: true, isSun: true }
+  scene.add(sunHitMesh)
+  clickableMeshes.push(sunHitMesh)
+
   // Directional key light from the sun direction — doesn't suffer physical falloff
   const sunLight = new THREE.DirectionalLight(0xffffff, 1.4)
   sunLight.position.set(0, 0, 0)
@@ -1000,16 +1007,20 @@ function buildScene() {
     .filter(Boolean)
 
   const baseR = 28, radStep = 10
-  const dirs = fibSphere(planets.length)
 
   planets.forEach((planet, i) => {
     const ptype  = pickPlanetType(planet.id)
     const hex    = planetHex(planet.id)         // still used for labels + drawer tint
     const r      = ptype.radius
     const rngP   = seededRng(planet.id + 'dist')
+    // Random direction on sphere: uniform spherical sampling via seeded RNG
+    const cosTheta = rngP() * 2 - 1
+    const sinTheta = Math.sqrt(Math.max(0, 1 - cosTheta * cosTheta))
+    const azimuth  = rngP() * Math.PI * 2
+    const dir = new THREE.Vector3(sinTheta * Math.cos(azimuth), cosTheta, sinTheta * Math.sin(azimuth))
     const jitter = (rngP() - 0.5) * 8
     const dist   = baseR + (i % 4) * radStep + jitter
-    const pos    = dirs[i].clone().multiplyScalar(dist)
+    const pos    = dir.multiplyScalar(dist)
 
     // Resolve texture:
     //   1. Real image texture (Solar System Scope) if loaded
@@ -1157,12 +1168,16 @@ function buildScene() {
     .map((id) => data.concepts[id])
     .filter(Boolean)
 
-  const conceptDirs = fibSphere(Math.max(concepts.length, 2))
   concepts.forEach((concept, i) => {
     const hex  = conceptHex(concept.id)
     const rngC = seededRng(concept.id + 'dist')
+    // Random direction on sphere: uniform spherical sampling via seeded RNG
+    const cosTheta = rngC() * 2 - 1
+    const sinTheta = Math.sqrt(Math.max(0, 1 - cosTheta * cosTheta))
+    const azimuth  = rngC() * Math.PI * 2
+    const dir = new THREE.Vector3(sinTheta * Math.cos(azimuth), cosTheta, sinTheta * Math.sin(azimuth))
     const dist = 22 + rngC() * 18  // inner-to-mid belt (22–40)
-    const pos  = conceptDirs[i % conceptDirs.length].clone().multiplyScalar(dist)
+    const pos  = dir.multiplyScalar(dist)
 
     // Push soul away from any planet it's too close to
     for (let iter = 0; iter < 10; iter++) {
@@ -1301,7 +1316,7 @@ function onMouseMove(e: MouseEvent) {
   if (soulHit) { containerRef.value.style.cursor = 'pointer'; return }
 
   const hits = raycaster.intersectObjects(clickableMeshes, true)
-  const hit  = hits.find((h) => h.object.userData.planetId || h.object.parent?.userData.planetId)
+  const hit  = hits.find((h) => h.object.userData.planetId || h.object.parent?.userData.planetId || h.object.userData.isSun)
   containerRef.value.style.cursor = hit ? 'pointer' : 'grab'
 }
 
@@ -1321,8 +1336,10 @@ function onClick(e: MouseEvent) {
   if (soulHit) { collectSoulFromScene(soulHit.object.userData.conceptId); return }
 
   const hits = raycaster.intersectObjects(clickableMeshes, true)
-  const hit  = hits.find((h) => h.object.userData.planetId || h.object.parent?.userData.planetId)
+  const hit  = hits.find((h) => h.object.userData.planetId || h.object.parent?.userData.planetId || h.object.userData.isSun)
   if (!hit) return
+
+  if (hit.object.userData.isSun) { navigateBack(); return }
 
   const ud = hit.object.userData.planetId ? hit.object.userData : hit.object.parent!.userData
   flyToPlanet(ud.planetId as string, true)
