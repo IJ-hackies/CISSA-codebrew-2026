@@ -128,25 +128,29 @@ export async function runClusterStage(
     return;
   }
 
-  // Compact input: one line per source.
+  // Compact input: one line per source (or segment, post-ingest). A long
+  // source may have been split into multiple virtual sources during
+  // ingest — each one is labelled with its segment title here, so the
+  // cluster model sees the real topic structure instead of just filenames.
   const lines = ctx.sources.map((s, i) => {
     const themes = s.keyThemes.slice(0, 4).join(", ");
     return `${i}. ${s.title} | themes: ${themes} | tone: ${s.tone}`;
   });
 
-  // Target range comes straight from the budget — no more ad-hoc
-  // sqrt-of-count math.
-  const targetLo = budget.solarSystems.min;
-  const targetHi = budget.solarSystems.max;
-
-  const separationHint = n <= 3
-    ? `If the sources cover clearly different topics, give each its own solar system rather than forcing them together.`
-    : `Prefer fewer, broader systems over many narrow ones — match the scope to the input volume.`
+  // Target range comes from the budget, floored so multi-source uploads
+  // always get a chance to split. If n >= 2 we never ask for just 1
+  // system — the previous behaviour (small tier → {1,2}) let Flash
+  // collapse everything into a single system, which is the bug this
+  // whole change is fixing.
+  const targetLo = Math.max(budget.solarSystems.min, n >= 2 ? 2 : 1);
+  const targetHi = Math.max(targetLo, budget.solarSystems.max);
 
   const prompt = [
-    `You are designing a knowledge galaxy out of ${n} source document(s).`,
+    `You are designing a knowledge galaxy out of ${n} source document(s) or document segments.`,
     ``,
-    `Group them into ${targetLo}-${targetHi} thematic "solar systems". Each source must be assigned to exactly one solar system by its numeric index. ${separationHint}`,
+    `Group them into ${targetLo}-${targetHi} thematic "solar systems". Each source must be assigned to exactly one solar system by its numeric index.`,
+    ``,
+    `Split clearly distinct topics into separate solar systems. Only group sources together when they share a strong common theme — do NOT merge unrelated topics just to reduce the system count. A galaxy with multiple focused solar systems is better than one sprawling catch-all. If you can identify ${targetLo} or more genuinely distinct themes across these sources, produce that many systems.`,
     ``,
     `Sources (numbered):`,
     lines.join("\n"),

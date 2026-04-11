@@ -179,12 +179,15 @@ async function runStagedPipeline(
   await runIngestStage(ctx, sourceRows);
   persist(galaxyId);
 
-  // Input budget is computed ONCE, right after ingest, from the total
-  // volume of source summaries. Every downstream stage reads counts
-  // and word targets from this. Logged for debugging.
-  const budget = computeInputBudget(ctx);
+  // Input budget is computed ONCE, right after ingest, and drives every
+  // downstream stage's counts and word targets. Tiered by RAW INPUT
+  // BYTES (not summary length) so a 50-page PDF that summarises to 1KB
+  // of text still tiers as "medium" instead of "tiny". ctx.sources may
+  // contain more entries than sourceRows if any file was segmented.
+  const totalInputBytes = sourceRows.reduce((n, r) => n + r.byteSize, 0);
+  const budget = computeInputBudget(ctx, totalInputBytes);
   console.log(
-    `[pipeline:${galaxyId}] budget=${budget.tier} model=${budget.model} sources=${budget.sourceCount} chars=${budget.totalSourceChars}`,
+    `[pipeline:${galaxyId}] budget=${budget.tier} model=${budget.model} sources=${budget.sourceCount} bytes=${totalInputBytes} chars=${budget.totalSourceChars}`,
   );
 
   setStage(galaxyId, "cluster", `tier=${budget.tier}`);
