@@ -1,69 +1,60 @@
-# Scholar System
+# Stella Taco
 
-An AI-powered platform that transforms uploaded content — PDFs, lecture notes, journals, transcripts, and more — into a navigable 3D galaxy. The system parses source material into structured knowledge nodes, generates long-form character-driven narratives that thread through them, and renders the result as an interactive Three.js cosmos.
+Upload anything. Build a galaxy. Explore it. Share it to The Taco
 
-Built for **Codebrew 2026** by Team Gin (University of Melbourne).
+You drop in a PDF, some lecture notes, a journal, a transcript, and Stella Taco breaks it apart into a 3D cosmos you can actually navigate. Solar systems cluster related themes, planets hold content, Little soul fragments float between them representing key concepts. Travel through the galaxy to understand the story and share your galaxies with others on **The Taco**.
 
-## Overview
+---
 
-Users upload documents, and a three-stage AI pipeline processes them into a **markdown mesh** — a workspace of typed markdown files that serve as the source of truth:
+## What it does
 
-1. **Ingest** — Parse uploaded files into `(Source)` summaries
-2. **Structure** — Discover `(Solar System)` groupings, `(Planet)` knowledge nodes, and `(Concept)` thematic connections
-3. **Stories** — Generate `(Story)` files: thousands-of-words narrative arcs where a character journeys across planets
+Drop files into the chat. The AI runs three stages:
 
-The galaxy is then rendered as a 3D force-directed graph with three zoom levels: galaxy overview, solar system drill-down, and an inline story reader.
+1. **Ingest**: reads everything you uploaded and summarises each source
+2. **Structure**: organises the material into solar systems (thematic clusters), planets (specific knowledge nodes), and concepts (themes, patterns, key figures)
+3. **Stories**: writes narratives where a character journeys across the planets, discovering what's on each one.
 
-## Tech Stack
+The output is a navigable 3D space built with Three.js. You can orbit the whole galaxy, click into a solar system to see its planets, open a planet to read dense prose about that piece of knowledge, collect concept "souls", and follow a character through a story that threads everything together.
 
-| Layer | Technologies |
-|-------|-------------|
-| **Frontend** | Vue 3, Vite, TypeScript, Tailwind CSS v4, Vue Router, Three.js, D3 Force-3D, GSAP |
-| **Backend** | Bun, Hono, TypeScript, SQLite (metadata/cache) |
-| **AI Pipeline** | Gemini API for content generation and structure extraction |
-| **Shared** | TypeScript types via Zod schemas in `packages/shared/` |
+---
 
-Deliberately omitted: accounts/auth, Redis, Postgres, S3, AI image generation, WebSockets. UUIDs serve as access keys; SSE provides pipeline progress updates.
+## Why we built it
 
-## Project Structure
+The tools for preserving knowledge already exist: Wikipedia, Obsidian, Notion, museum digital archives, and they all do the job of storing information. What they don't do well is make you *want* to explore it. What makes the best knowledge experiences actually stick isn't storage but instead navigation. The sense that you're moving through something, not just querying it. The spatial and narrative dimensions are what create memory and connection, and almost every digital knowledge tool strips those out completely.
 
-```
-.
-├── .claude/                  # Claude Code configuration and skills
-├── .context/                 # Project context documentation
-├── apps/
-│   ├── client/               # Vue 3 + Three.js frontend
-│   ├── server-gemini/        # Bun + Hono backend (active — API, pipeline, mesh parsing)
-│   ├── server/               # Legacy backend (deprecated)
-│   └── proxy/                # Proxy server for worker pool (VPS deployment)
-└── packages/
-    └── shared/               # Shared TypeScript type definitions
-```
+We took what actually works about those experiences and rebuilt it for personal and cultural archives. The 3D galaxy gives you the spatial quality, you can orbit, zoom in, and notice things at the edges of your view. The stories give you the narrative layer instead of reading a flat summary, and Gemini does the structural work that Obsidian makes you do by hand.
 
-## Prerequisites
+The other problem is access, a cultural archive that only one person can see isn't really preserved, it's just stored. That's where **The Taco** comes in. Every galaxy can be published to a shared public feed where anyone can browse, search, and explore what other people have built, all of it can live in the same place, each with its own galaxy, each discoverable by anyone who stumbles across it.
 
-- [Bun](https://bun.sh/)
-- [Node.js](https://nodejs.org/)
-- Git
+---
 
-## Getting Started
+## Tech
+
+- **Frontend**: Vue 3, TypeScript, Tailwind v4, Three.js, D3 Force-3D, GSAP
+- **Backend**: Bun, Hono, TypeScript, SQLite (for metadata/cache only)
+- **AI**: Gemini API for the content pipeline
+
+---
+
+## Running it locally
 
 ```bash
-bun install              # Install all workspace dependencies
-bun run dev              # Start client + server concurrently
+bun install
+bun run dev
 ```
 
-Individual services:
+Frontend runs on port `8888`, backend on `8889`. The client proxies `/api/*` to the server automatically.
 
-```bash
-bun run dev:client       # Frontend only (port 8888)
-bun run dev:server       # Backend only (port 8889)
-bun run dev:proxy        # Proxy only (port 8890)
-bun run build            # Production build (client)
+You'll need a `.env` in `apps/server-gemini/` with a `GEMINI_API_KEY`.
+
+---
+
+## Project structure
+
 ```
-
-## Development Notes
-
-- The frontend proxies `/api/*` requests from port `8888` to the backend on port `8889`.
-- Detailed project context, architecture decisions, and progress tracking are in `.context/ABOUT.md`.
-- Claude Code skills are configured in `.claude/` — run `/recontext` to load project context into a Claude Code session.
+apps/
+  client/          Vue 3 + Three.js frontend
+  server-gemini/   Bun + Hono backend (pipeline, mesh parsing, API)
+packages/
+  shared/          TypeScript types shared between client and server
+```

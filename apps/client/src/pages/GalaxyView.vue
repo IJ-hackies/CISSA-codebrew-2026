@@ -167,7 +167,7 @@ const router = useRouter()
 const route  = useRoute()
 const isMobile = useIsMobile()
 const isTacoView = computed(() => route.query.source === 'taco')
-const { data: meshData, galaxyId, visitedPlanetIds, collectedConceptIds, loadFromApi, getOrGenerateSystemPreset, collectConcept, isConceptCollected } = useMeshStore()
+const { data: meshData, galaxyId, visitedPlanetIds, collectedConceptIds, loadFromApi, loadFromApiComplete, getOrGenerateSystemPreset, collectConcept, isConceptCollected } = useMeshStore()
 
 // ── Mobile nav menu ───────────────────────────────────────────────────────────
 const menuOpen = ref(false)
@@ -1045,11 +1045,13 @@ const { triggerWarp } = useWarpEffect()
 
 onMounted(async () => {
   const gid = (route.params.id as string) ?? 'fixture'
-  // Skip the fetch if the store already holds data for this galaxy (e.g. returning from SolarSystemView).
+  // Always poll to completion when fetching fresh data — ensures planets,
+  // concepts, and stories are all present before buildGraph() runs.
+  // Skip the fetch only when returning from SolarSystemView (same galaxy,
+  // data already complete in store).
   if (!meshData.value || galaxyId.value !== gid) {
-    await loadFromApi(gid)
+    await loadFromApiComplete(gid)
   }
-  loading.value = false
   // Record the very first galaxy the user ever visits
   if (!localStorage.getItem(FIRST_GALAXY_KEY)) {
     localStorage.setItem(FIRST_GALAXY_KEY, gid)
@@ -1084,11 +1086,14 @@ onMounted(async () => {
     originalRender()
   }
 
+  // Build the full 3D graph — all solar systems (with planets + concepts +
+  // stories already in meshData) are added to the scene before we reveal it.
   buildGraph()
 
-  // Arrival: fade veil out — slower when coming fresh from ChatLanding so the
-  // galaxy emerges cinematically rather than popping in.
+  // Loading overlay fades out (z-index 80) while the veil (z-index 70) kicks
+  // in from opacity 1 beneath it, so there's never a flash of an empty scene.
   if (veilRef.value) gsap.fromTo(veilRef.value, { opacity: 1 }, { opacity: 0, duration: 0.9, ease: 'power1.out' })
+  loading.value = false
 
   // No mousemove on mobile — taps would briefly fire it and flash the
   // hover tooltip ("little div") on every system tap.
