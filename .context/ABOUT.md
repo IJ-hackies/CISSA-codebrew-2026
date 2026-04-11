@@ -1,10 +1,12 @@
-# Scholar System
+# Stella Taco
 
 > **PIVOT (v4): Narrative Galaxy — Markdown Mesh.** The data model moved from a JSON blob in SQLite to a **markdown mesh** — a workspace of typed markdown files that Claude Code writes directly. Entity types are now Solar System, Planet, Concept, and Story. Pipeline is 3 stages. Stories are long-form character-driven narratives. The markdown IS the data.
 
+> **Rename (2026-04-12):** Project renamed from "Scholar System" to **Stella Taco**. All user-facing copy, page titles, aria-labels, and wordmarks updated.
+
 ## What Is This?
 
-Scholar System is an AI-powered platform that transforms any uploaded content — PDFs, lecture notes, journals, transcripts, code, PowerPoints — into a navigable 3D galaxy. Users upload data, and the system breaks it into **solar systems** (thematic groupings), **planets** (concrete knowledge nodes), and **concepts** (flexible thematic nodes), then generates long-form **stories** — character-driven narrative arcs where a character travels between planets and is transformed by what they find. The galaxy is rendered as an interactive 3D space with Three.js where planets orbit in solar systems, concepts float as soul fragments, and stories thread everything together.
+Stella Taco is an AI-powered platform that transforms any uploaded content — PDFs, lecture notes, journals, transcripts, code, PowerPoints — into a navigable 3D galaxy. Users upload data, and the system breaks it into **solar systems** (thematic groupings), **planets** (concrete knowledge nodes), and **concepts** (flexible thematic nodes), then generates long-form **stories** — character-driven narrative arcs where a character travels between planets and is transformed by what they find. The galaxy is rendered as an interactive 3D space with Three.js where planets orbit in solar systems, concepts float as soul fragments, and stories thread everything together.
 
 **Think:** Claude builds you an entire Obsidian vault from a single upload, weaves a narrative through it, then you explore it as a 3D cosmos.
 
@@ -74,6 +76,19 @@ The galaxy is a Three.js scene with a force-directed layout. Solar systems appea
 - `apps/client/` — Vue 3 + Three.js frontend
 - `apps/server-gemini/` — active Bun + Hono backend used by the frontend
 - `packages/shared/` — Shared TypeScript types
+
+## The Taco (Public Gallery)
+
+Galaxies can be published to **The Taco** — a public discovery feed. Publishing requires an owner token (stored in `localStorage` at creation). Each published galaxy has a tagline. The Taco tab on `TacoDashboard` lists all public galaxies with sort (newest / most planets / A→Z) and search. Unpublishing removes the galaxy from the feed immediately.
+
+## Frontend Caching
+
+`lib/dataCache.ts` is a singleton cache module that:
+- Hydrates from `localStorage` (5-min TTL) on import — zero-wait render on return visits
+- Kicks off network fetches in the background via `prefetchAll()` called in `App.vue` `onMounted` — data is in-flight before any page component mounts
+- Prefetches submissions for the 8 most recent complete galaxies after the list loads
+- Deduplicates in-flight requests; skips refetch within 2 min of last fetch (within-session navigation)
+- `syncGalaxyListCache()` must be called after any local mutation to keep localStorage consistent
 
 ## Integration Status
 

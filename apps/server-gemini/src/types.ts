@@ -100,4 +100,12 @@ export interface GalaxyRow {
   error: string | null;
   createdAt: number;
   updatedAt: number;
+  isPublic: boolean;
+  tagline: string | null;
+  lastOwnerSeenAt: number | null;
+}
+
+/** Shape returned only on creation — includes the owner token. */
+export interface GalaxyCreateResult extends GalaxyRow {
+  ownerToken: string;
 }

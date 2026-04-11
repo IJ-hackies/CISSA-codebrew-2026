@@ -126,7 +126,7 @@ async function resolveCreateInput(c: Context): Promise<ResolvedInput> {
       });
     }
 
-    const title = titleField || files[0]?.name.replace(/\.[^.]+$/, "") || "Untitled";
+    const title = titleField || "Untitled";
     return { title, files, rawText: textField || undefined };
   }
 
@@ -165,8 +165,9 @@ galaxyRoutes.post("/create", async (c) => {
   }
 
   const galaxyId = randomUUID();
+  const ownerToken = randomUUID();
   const paths = ensureGalaxyDirs(galaxyId);
-  createGalaxyRow(galaxyId, resolved.title);
+  createGalaxyRow(galaxyId, resolved.title, ownerToken);
 
   // Persist files to media/sources/ and index them in SQLite.
   const now = Date.now();
@@ -209,6 +210,7 @@ galaxyRoutes.post("/create", async (c) => {
       title: row.title,
       status: row.status,
       stageDetail: row.stageDetail,
+      ownerToken,
       galaxy: emptyGalaxy(),
     },
     201,
@@ -232,6 +234,8 @@ galaxyRoutes.get("/:id", (c) => {
     error: row.error,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    isPublic: row.isPublic,
+    tagline: row.tagline,
     galaxy,
   });
 });

@@ -1,19 +1,27 @@
-<script setup lang="ts"></script>
+<script setup lang="ts">
+import { onMounted } from 'vue'
+import { prefetchAll } from '@/lib/dataCache'
+
+onMounted(() => {
+  prefetchAll()
+})
+</script>
 
 <template>
   <RouterView v-slot="{ Component }">
-    <!-- No mode="out-in" — pages overlap during transition so there's no mount gap.
-         Both pages share the same #02040a background. Nav-veil in each page handles
-         the actual cross-fade so the 3D canvas never goes blank. -->
-    <Transition name="void-fade">
+    <!-- mode="out-in": old page fully leaves before new page enters.
+         Eliminates double-canvas jitter and scrollbar from two full-height
+         pages coexisting. Body background (#02040a) fills the brief gap
+         invisibly since all pages share the same base colour. -->
+    <Transition name="void-fade" mode="out-in">
       <component :is="Component" />
     </Transition>
   </RouterView>
 </template>
 
 <style>
-.void-fade-enter-active { transition: opacity 300ms ease; }
-.void-fade-leave-active { transition: opacity 600ms ease; }
+.void-fade-enter-active { transition: opacity 240ms ease; }
+.void-fade-leave-active { transition: opacity 160ms ease; }
 .void-fade-enter-from   { opacity: 0; }
 .void-fade-leave-to     { opacity: 0; }
 </style>

@@ -45,6 +45,9 @@ export interface GalaxyEnvelope {
   createdAt: number
   updatedAt: number
   galaxy: GalaxyData
+  isPublic?: boolean
+  tagline?: string | null
+  ownerToken?: string // only present on create response
 }
 
 export interface CreateGalaxyInput {
@@ -87,7 +90,14 @@ export async function createGalaxy(input: CreateGalaxyInput): Promise<GalaxyEnve
     throw new Error(detail)
   }
 
-  return (await res.json()) as GalaxyEnvelope
+  const envelope = (await res.json()) as GalaxyEnvelope
+  // Persist the owner token so the user can manage this galaxy later.
+  if (envelope.ownerToken) {
+    try {
+      localStorage.setItem(`stellaTaco.ownerToken:${envelope.id}`, envelope.ownerToken)
+    } catch { /* storage full or private mode */ }
+  }
+  return envelope
 }
 
 export async function fetchGalaxyEnvelope(id: string): Promise<GalaxyEnvelope> {
@@ -133,6 +143,8 @@ export interface GalaxyRowSummary {
   error: string | null
   createdAt: number
   updatedAt: number
+  isPublic: boolean
+  tagline: string | null
 }
 
 export async function deleteGalaxy(id: string): Promise<void> {
@@ -201,4 +213,122 @@ export async function fetchSubmissions(galaxyId: string): Promise<Submission[]> 
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = (await res.json()) as { submissions: Submission[] }
   return body.submissions
+}
+
+// ── Owner token helpers ────────────────────────────────────────────
+
+export function getOwnerToken(galaxyId: string): string | null {
+  try {
+    return localStorage.getItem(`stellaTaco.ownerToken:${galaxyId}`)
+  } catch {
+    return null
+  }
+}
+
+/** True if the current browser owns this galaxy. */
+export function isOwner(galaxyId: string): boolean {
+  return !!getOwnerToken(galaxyId)
+}
+
+/**
+ * Collect all {galaxyId, ownerToken} pairs from localStorage for reconcile.
+ * Reads all stellaTaco.ownerToken:* keys.
+ */
+export function getAllOwnedPairs(): Array<{ galaxyId: string; ownerToken: string }> {
+  const pairs: Array<{ galaxyId: string; ownerToken: string }> = []
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (key?.startsWith('stellaTaco.ownerToken:')) {
+        const galaxyId = key.slice('stellaTaco.ownerToken:'.length)
+        const ownerToken = localStorage.getItem(key)
+        if (galaxyId && ownerToken) pairs.push({ galaxyId, ownerToken })
+      }
+    }
+  } catch { /* storage unavailable */ }
+  return pairs
+}
+
+// ── Gallery ("The Taco") API ───────────────────────────────────────
+
+export interface GalleryCard {
+  id: string
+  title: string
+  tagline: string | null
+  updatedAt: number
+  solarSystemCount: number
+  planetCount: number
+}
+
+export type GallerySortOrder = 'newest' | 'planets' | 'alpha'
+
+export async function fetchGallery(
+  sort: GallerySortOrder = 'newest',
+  q = '',
+): Promise<GalleryCard[]> {
+  const params = new URLSearchParams()
+  if (sort !== 'newest') params.set('sort', sort)
+  if (q) params.set('q', q)
+  const url = `/api/gallery${params.size ? `?${params}` : ''}`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const body = (await res.json()) as { cards: GalleryCard[] }
+  return body.cards
+}
+
+export async function publishToTaco(
+  galaxyId: string,
+  tagline: string,
+): Promise<void> {
+  const ownerToken = getOwnerToken(galaxyId)
+  if (!ownerToken) throw new Error('no owner token for this galaxy')
+  const res = await fetch('/api/gallery/publish', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ galaxyId, ownerToken, tagline }),
+  })
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string; reason?: string }
+    throw new Error(err.reason ?? err.error ?? `HTTP ${res.status}`)
+  }
+}
+
+export async function unpublishFromTaco(galaxyId: string): Promise<void> {
+  const ownerToken = getOwnerToken(galaxyId)
+  if (!ownerToken) throw new Error('no owner token for this galaxy')
+  const res = await fetch('/api/gallery/unpublish', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ galaxyId, ownerToken }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+}
+
+export async function updateTacoTagline(
+  galaxyId: string,
+  tagline: string,
+): Promise<void> {
+  const ownerToken = getOwnerToken(galaxyId)
+  if (!ownerToken) throw new Error('no owner token for this galaxy')
+  const res = await fetch(`/api/gallery/${encodeURIComponent(galaxyId)}/tagline`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ownerToken, tagline }),
+  })
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string; reason?: string }
+    throw new Error(err.reason ?? err.error ?? `HTTP ${res.status}`)
+  }
+}
+
+export async function reconcileOwnership(): Promise<void> {
+  const owned = getAllOwnedPairs()
+  if (owned.length === 0) return
+  try {
+    await fetch('/api/gallery/reconcile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owned }),
+    })
+  } catch { /* non-fatal — reconcile is best-effort */ }
 }

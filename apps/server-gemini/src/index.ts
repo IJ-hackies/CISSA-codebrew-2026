@@ -8,6 +8,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { galaxyRoutes } from "./routes/galaxy";
+import { galleryRoutes } from "./routes/gallery";
 import { db } from "./db/client";
 import { galaxiesRoot } from "./workspace/layout";
 
@@ -25,6 +26,7 @@ app.get("/api/health", (c) =>
 );
 
 app.route("/api/galaxy", galaxyRoutes);
+app.route("/api/gallery", galleryRoutes);
 
 const port = Number(process.env.PORT ?? 8889);
 console.log(`[server-gemini] listening on http://localhost:${port}`);

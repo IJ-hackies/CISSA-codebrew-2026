@@ -48,5 +48,6 @@
       "Bash(echo \"exit=$?\")",
       "Bash(echo \"EXIT=$?\")"
     ]
-  }
+  },
+  "prefersReducedMotion": true
 }
