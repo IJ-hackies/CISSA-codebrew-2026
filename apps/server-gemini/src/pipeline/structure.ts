@@ -99,12 +99,13 @@ export async function runClusterStage(
   const n = ctx.sources.length;
   if (n === 0) return;
 
-  // Lever 4: fewer than 4 sources never need clustering — there's no
-  // meaningful partition to discover. Synthesise one solar system
-  // containing everything and skip the Flash call entirely. Title
-  // falls back through galaxy title → first source title → a placeholder
+  // Lever 4: a single source never needs clustering — there's no partition
+  // to discover. Synthesise one solar system and skip the Flash call.
+  // Title falls back through galaxy title → first source title → a placeholder
   // so the downstream outline prompt always has something to work with.
-  if (n <= 3) {
+  // Multi-source uploads always go through the AI cluster call so topics can
+  // be separated into distinct solar systems.
+  if (n === 1) {
     const title =
       ctx.galaxyTitle?.trim() || ctx.sources[0]?.title || "Knowledge Galaxy";
     const themes = Array.from(
@@ -138,10 +139,14 @@ export async function runClusterStage(
   const targetLo = budget.solarSystems.min;
   const targetHi = budget.solarSystems.max;
 
+  const separationHint = n <= 3
+    ? `If the sources cover clearly different topics, give each its own solar system rather than forcing them together.`
+    : `Prefer fewer, broader systems over many narrow ones — match the scope to the input volume.`
+
   const prompt = [
     `You are designing a knowledge galaxy out of ${n} source document(s).`,
     ``,
-    `Group them into ${targetLo}-${targetHi} thematic "solar systems". Each source must be assigned to exactly one solar system by its numeric index. Prefer fewer, broader systems over many narrow ones — match the scope to the input volume.`,
+    `Group them into ${targetLo}-${targetHi} thematic "solar systems". Each source must be assigned to exactly one solar system by its numeric index. ${separationHint}`,
     ``,
     `Sources (numbered):`,
     lines.join("\n"),

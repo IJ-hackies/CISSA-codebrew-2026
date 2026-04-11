@@ -92,11 +92,13 @@ export async function runPipeline(galaxyId: string): Promise<void> {
   const proLimiter = createLimiter(proConcurrency());
 
   try {
-    // Lever 1: one-shot branch for tiny/small input. A single Flash call
-    // replaces the entire staged pipeline. On ANY failure we fall
-    // through to the staged flow — one-shot never blocks the slow path.
+    // Lever 1: one-shot branch for tiny/small single-source input. A single
+    // Flash call replaces the entire staged pipeline. Restricted to 1 source
+    // because the one-shot schema only supports a single solar system — multi-
+    // source uploads need the staged cluster stage to separate topics correctly.
+    // On ANY failure we fall through to the staged flow.
     const rawTier = pickTierFromRows(sourceRows);
-    if (rawTier === "tiny" || rawTier === "small") {
+    if ((rawTier === "tiny" || rawTier === "small") && sourceRows.length === 1) {
       const oneShotBudget = budgetForTier(rawTier, sourceRows.length);
       console.log(
         `[pipeline:${galaxyId}] one-shot attempt tier=${rawTier} sources=${sourceRows.length}`,
