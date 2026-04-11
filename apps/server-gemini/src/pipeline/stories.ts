@@ -9,13 +9,13 @@
 
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import { generateJson, MODEL_PRO } from "./gemini";
+import { generateJson } from "./gemini";
 import { mapViaLimiter, type Limiter } from "../lib/concurrency";
 import { writeStory } from "../workspace/write";
 import type { PipelineContext, StoryCtx } from "./context";
 import { allPlanets, allConcepts } from "./context";
 import type { InputBudget } from "./budget";
-import { wordsToOutputTokens } from "./budget";
+import { wordsToOutputTokens, modelForBudget } from "./budget";
 
 // ── 3a. Story pitches ──────────────────────────────────────────────
 
@@ -115,7 +115,7 @@ export async function runStoryPitchesStage(
   ].join("\n");
 
   const result = await generateJson({
-    model: MODEL_PRO,
+    model: modelForBudget(budget),
     parts: [{ text: prompt }],
     schema: pitchesSchema,
     jsonSchema: pitchesJsonSchema,
@@ -253,7 +253,7 @@ export async function runWriteStoriesStage(
     ].join("\n");
 
     const out = await generateJson({
-      model: MODEL_PRO,
+      model: modelForBudget(budget),
       parts: [{ text: prompt }],
       schema: storyBodySchema,
       jsonSchema: storyBodyJsonSchema,

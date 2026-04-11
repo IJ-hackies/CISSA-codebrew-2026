@@ -12,7 +12,7 @@
 
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import { generateJson, MODEL_FLASH, MODEL_PRO } from "./gemini";
+import { generateJson, generateText, MODEL_FLASH } from "./gemini";
 import { mapViaLimiter, mapViaLimiterTolerant, type Limiter } from "../lib/concurrency";
 import {
   writeSolarSystem,
@@ -27,7 +27,21 @@ import type {
 } from "./context";
 import { allPlanetTitles, allConceptTitles } from "./context";
 import type { InputBudget } from "./budget";
-import { wordsToOutputTokens } from "./budget";
+import { wordsToOutputTokens, modelForBudget } from "./budget";
+
+// Strip fenced code blocks and leading headings from freeform prose
+// output. Flash/Pro sometimes wrap markdown in ``` fences or add a
+// top-level heading even when the prompt says not to — cheap to clean up
+// once on the way out rather than fighting the model on every prompt.
+function stripProseArtifacts(raw: string): string {
+  let out = raw.trim();
+  const fenceMatch = out.match(/^```(?:markdown|md)?\s*\n?([\s\S]*?)\n?```$/);
+  if (fenceMatch) out = fenceMatch[1].trim();
+  // Strip ONE leading `# heading` line if present — the file writer adds
+  // the real heading from the planet title.
+  out = out.replace(/^#[^\n]*\n+/, "");
+  return out.trim();
+}
 
 // ── 2a. Cluster ─────────────────────────────────────────────────────
 //
@@ -83,6 +97,34 @@ export async function runClusterStage(
 ): Promise<void> {
   const n = ctx.sources.length;
   if (n === 0) return;
+
+  // Lever 4: fewer than 4 sources never need clustering — there's no
+  // meaningful partition to discover. Synthesise one solar system
+  // containing everything and skip the Flash call entirely. Title
+  // falls back through galaxy title → first source title → a placeholder
+  // so the downstream outline prompt always has something to work with.
+  if (n <= 3) {
+    const title =
+      ctx.galaxyTitle?.trim() || ctx.sources[0]?.title || "Knowledge Galaxy";
+    const themes = Array.from(
+      new Set(ctx.sources.flatMap((s) => s.keyThemes.slice(0, 3))),
+    ).slice(0, 5);
+    const description =
+      themes.length > 0
+        ? `A focused collection exploring ${themes.join(", ")}.`
+        : `A focused collection of ${n} source document${n === 1 ? "" : "s"}.`;
+    ctx.solarSystems = [
+      {
+        id: randomUUID(),
+        title,
+        oneLineDescription: description,
+        sourceIds: ctx.sources.map((s) => s.id),
+        planets: [],
+        concepts: [],
+      },
+    ];
+    return;
+  }
 
   // Compact input: one line per source.
   const lines = ctx.sources.map((s, i) => {
@@ -290,7 +332,7 @@ export async function runOutlineStage(
     ].join("\n");
 
     const outline = await generateJson({
-      model: MODEL_PRO,
+      model: modelForBudget(budget),
       parts: [{ text: prompt }],
       schema: outlineSchema,
       jsonSchema: outlineJsonSchema,
@@ -345,24 +387,13 @@ export async function runOutlineStage(
 }
 
 // ── 2c. Expand each planet ──────────────────────────────────────────
-
-// Schema min lowered so tiny-tier planets (200-500 word bodies) pass
-// validation. The prompt still drives the target length per tier.
-const planetBodySchema = z.object({
-  body: z.string().min(200),
-});
-
-const planetBodyJsonSchema = {
-  type: "object",
-  required: ["body"],
-  properties: {
-    body: {
-      type: "string",
-      description:
-        "Markdown prose for this planet. Length target is set in the prompt — match it to the actual source material, do not pad. Use paragraphs. Embed `[[(Planet) Name]]` and `[[(Concept) Name]]` wikilinks inline where natural — only use titles from the provided lists. Do not include a heading.",
-    },
-  },
-};
+//
+// Lever 6: this stage returns plain markdown via generateText, not a
+// single-field JSON wrapper. JSON mode's constrained decoding is slow on
+// long outputs and the structured-output salvage logic adds nothing when
+// there's only one string field. Freeform is simpler and measurably
+// faster, and `stripProseArtifacts` cleans up the two ways the model
+// sometimes oversteps (``` fences or a stray `#` heading).
 
 export async function runExpandPlanetsStage(
   ctx: PipelineContext,
@@ -378,6 +409,7 @@ export async function runExpandPlanetsStage(
   }
 
   const planetOutputBudget = wordsToOutputTokens(budget.planetBodyWords.max);
+  const planetModel = modelForBudget(budget);
 
   const { failed } = await mapViaLimiterTolerant(
     tasks,
@@ -404,19 +436,19 @@ export async function runExpandPlanetsStage(
         ``,
         `TARGET LENGTH: ${budget.planetBodyWords.min}-${budget.planetBodyWords.max} words. This is the instruction — not a floor to pad toward. Match it to the source material above. If the source has only two paragraphs of content, your body should feel proportional, not inflated.`,
         ``,
-        `Write a dense markdown body. Paragraphs. Concrete details, examples, definitions, consequences. Inline \`[[(Planet) Other Title]]\` and \`[[(Concept) Name]]\` wikilinks where a reader would benefit from jumping — but only using titles from the lists above. Do NOT include a top-level heading (it is added when the file is written). Do not hedge. Do not add meta-commentary. Return structured JSON.`,
+        `Write a dense markdown body. Paragraphs. Concrete details, examples, definitions, consequences. Inline \`[[(Planet) Other Title]]\` and \`[[(Concept) Name]]\` wikilinks where a reader would benefit from jumping — but only using titles from the lists above. Do NOT include a top-level heading (it is added when the file is written). Do not hedge. Do not add meta-commentary.`,
+        ``,
+        `Return ONLY the markdown body. No JSON wrapper, no fenced code block, no preamble — just the prose.`,
       ].join("\n");
 
-      const out = await generateJson({
-        model: MODEL_PRO,
+      const raw = await generateText({
+        model: planetModel,
         parts: [{ text: prompt }],
-        schema: planetBodySchema,
-        jsonSchema: planetBodyJsonSchema,
         temperature: 0.85,
         maxOutputTokens: planetOutputBudget,
       });
 
-      planet.body = out.body;
+      planet.body = stripProseArtifacts(raw);
 
       writePlanet(ctx.galaxyId, {
         id: planet.id,
@@ -438,22 +470,9 @@ export async function runExpandPlanetsStage(
 }
 
 // ── 2d. Expand each concept ─────────────────────────────────────────
-
-const conceptBodySchema = z.object({
-  body: z.string().min(150),
-});
-
-const conceptBodyJsonSchema = {
-  type: "object",
-  required: ["body"],
-  properties: {
-    body: {
-      type: "string",
-      description:
-        "Markdown body for this concept. Length target set in the prompt. Paragraphs. Inline `[[(Planet) Name]]` and `[[(Concept) Name]]` wikilinks using only titles from the provided lists. No top-level heading.",
-    },
-  },
-};
+//
+// Lever 6: same freeform-text approach as expand-planets. See that
+// stage's comment for rationale.
 
 export async function runExpandConceptsStage(
   ctx: PipelineContext,
@@ -469,6 +488,7 @@ export async function runExpandConceptsStage(
   }
 
   const conceptOutputBudget = wordsToOutputTokens(budget.conceptBodyWords.max);
+  const conceptModel = modelForBudget(budget);
 
   const { failed } = await mapViaLimiterTolerant(
     tasks,
@@ -496,18 +516,18 @@ export async function runExpandConceptsStage(
         `TARGET LENGTH: ${budget.conceptBodyWords.min}-${budget.conceptBodyWords.max} words. Match it to the source material — do not pad.`,
         ``,
         `Unlike a planet, a concept can be more thematic — explore why it matters, how it shows up across different planets, what makes it distinctive. Inline \`[[wikilinks]]\` using only titles from the lists above. No top-level heading.`,
+        ``,
+        `Return ONLY the markdown body. No JSON wrapper, no fenced code block, no preamble — just the prose.`,
       ].join("\n");
 
-      const out = await generateJson({
-        model: MODEL_PRO,
+      const raw = await generateText({
+        model: conceptModel,
         parts: [{ text: prompt }],
-        schema: conceptBodySchema,
-        jsonSchema: conceptBodyJsonSchema,
         temperature: 0.85,
         maxOutputTokens: conceptOutputBudget,
       });
 
-      concept.body = out.body;
+      concept.body = stripProseArtifacts(raw);
 
       writeConcept(ctx.galaxyId, {
         id: concept.id,

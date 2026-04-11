@@ -1,7 +1,14 @@
-// Pipeline orchestrator. Runs ingest → cluster → outline → expand-planets
-// → expand-concepts → story-pitches → write-stories, persisting GalaxyData
-// to SQLite after every stage so the frontend can poll and see progressive
-// results. Errors short-circuit the run and record on the galaxy row.
+// Pipeline orchestrator. Two entry paths:
+//
+//   - ONE-SHOT (Lever 1) — for tiny/small input (≤5 rows AND ≤50KB),
+//     a single Gemini Flash call produces the entire galaxy in one go.
+//     Skips ingest, cluster, outline, expand, pitches, write-stories
+//     entirely. Falls back to the staged pipeline on any failure.
+//
+//   - STAGED — the original flow: ingest → cluster → outline →
+//     expand-planets → expand-concepts → story-pitches → write-stories,
+//     persisting GalaxyData to SQLite after every stage so the frontend
+//     can poll and see progressive results.
 //
 // Two orchestrator-level concerns that stage files don't own:
 //
@@ -25,13 +32,15 @@ import {
   runExpandConceptsStage,
 } from "./structure";
 import { runStoryPitchesStage, runWriteStoriesStage } from "./stories";
-import { computeInputBudget } from "./budget";
-import { createLimiter } from "../lib/concurrency";
+import { runOneShotPipeline } from "./oneshot";
+import { computeInputBudget, pickTierFromRows, budgetForTier } from "./budget";
+import { createLimiter, type Limiter } from "../lib/concurrency";
 import {
   listSourceRows,
   updateGalaxyStatus,
   cacheGalaxyData,
   getGalaxyRow,
+  type SourceRow,
 } from "../db/client";
 import { parseWorkspace } from "../workspace/parse";
 import { galaxyPaths } from "../workspace/layout";
@@ -83,45 +92,36 @@ export async function runPipeline(galaxyId: string): Promise<void> {
   const proLimiter = createLimiter(proConcurrency());
 
   try {
-    setStage(galaxyId, "ingest", `${sourceRows.length} source(s)`);
-    await runIngestStage(ctx, sourceRows);
-    persist(galaxyId);
+    // Lever 1: one-shot branch for tiny/small input. A single Flash call
+    // replaces the entire staged pipeline. On ANY failure we fall
+    // through to the staged flow — one-shot never blocks the slow path.
+    const rawTier = pickTierFromRows(sourceRows);
+    if (rawTier === "tiny" || rawTier === "small") {
+      const oneShotBudget = budgetForTier(rawTier, sourceRows.length);
+      console.log(
+        `[pipeline:${galaxyId}] one-shot attempt tier=${rawTier} sources=${sourceRows.length}`,
+      );
+      try {
+        await runOneShotPipeline(ctx, sourceRows, oneShotBudget);
+        persist(galaxyId);
+        setStage(galaxyId, "complete");
+        return;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[pipeline:${galaxyId}] one-shot failed, falling back to staged: ${msg}`,
+        );
+        // Reset ctx so the staged flow starts from a clean slate. Any
+        // mesh files that the one-shot MIGHT have written are left on
+        // disk — one-shot writes them last, so a failure during the LLM
+        // call (by far the common failure mode) leaves disk untouched.
+        ctx.sources = [];
+        ctx.solarSystems = [];
+        ctx.stories = [];
+      }
+    }
 
-    // Input budget is computed ONCE, right after ingest, from the total
-    // volume of source summaries. Every downstream stage reads counts
-    // and word targets from this. Logged for debugging.
-    const budget = computeInputBudget(ctx);
-    console.log(
-      `[pipeline:${galaxyId}] budget=${budget.tier} sources=${budget.sourceCount} chars=${budget.totalSourceChars}`,
-    );
-
-    setStage(galaxyId, "cluster", `tier=${budget.tier}`);
-    await runClusterStage(ctx, budget);
-
-    setStage(galaxyId, "outline", `${ctx.solarSystems.length} solar system(s)`);
-    await runOutlineStage(ctx, budget, proLimiter);
-    persist(galaxyId);
-
-    const planetCount = ctx.solarSystems.reduce((n, s) => n + s.planets.length, 0);
-    const conceptCount = ctx.solarSystems.reduce((n, s) => n + s.concepts.length, 0);
-    setStage(galaxyId, "expand", `${planetCount} planets, ${conceptCount} concepts`);
-
-    // Planets and concepts both feed into the shared Pro limiter, so
-    // `Promise.all` here does NOT double the in-flight slot count —
-    // the limiter keeps total Pro calls at <= PRO_CONCURRENCY.
-    await Promise.all([
-      runExpandPlanetsStage(ctx, budget, proLimiter),
-      runExpandConceptsStage(ctx, budget, proLimiter),
-    ]);
-    persist(galaxyId);
-
-    setStage(galaxyId, "stories", "pitching");
-    await runStoryPitchesStage(ctx, budget);
-
-    setStage(galaxyId, "stories", `writing ${ctx.stories.length} stor${ctx.stories.length === 1 ? "y" : "ies"}`);
-    await runWriteStoriesStage(ctx, budget, proLimiter);
-    persist(galaxyId);
-
+    await runStagedPipeline(ctx, sourceRows, proLimiter);
     setStage(galaxyId, "complete");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -133,4 +133,57 @@ export async function runPipeline(galaxyId: string): Promise<void> {
     }
     updateGalaxyStatus(galaxyId, "error", "", msg);
   }
+}
+
+// The original 6-stage flow, extracted so `runPipeline` can invoke it
+// either directly (medium/large) or as a fallback from one-shot.
+async function runStagedPipeline(
+  ctx: PipelineContext,
+  sourceRows: SourceRow[],
+  proLimiter: Limiter,
+): Promise<void> {
+  const { galaxyId } = ctx;
+
+  setStage(galaxyId, "ingest", `${sourceRows.length} source(s)`);
+  await runIngestStage(ctx, sourceRows);
+  persist(galaxyId);
+
+  // Input budget is computed ONCE, right after ingest, from the total
+  // volume of source summaries. Every downstream stage reads counts
+  // and word targets from this. Logged for debugging.
+  const budget = computeInputBudget(ctx);
+  console.log(
+    `[pipeline:${galaxyId}] budget=${budget.tier} model=${budget.model} sources=${budget.sourceCount} chars=${budget.totalSourceChars}`,
+  );
+
+  setStage(galaxyId, "cluster", `tier=${budget.tier}`);
+  await runClusterStage(ctx, budget);
+
+  setStage(galaxyId, "outline", `${ctx.solarSystems.length} solar system(s)`);
+  await runOutlineStage(ctx, budget, proLimiter);
+  persist(galaxyId);
+
+  const planetCount = ctx.solarSystems.reduce((n, s) => n + s.planets.length, 0);
+  const conceptCount = ctx.solarSystems.reduce((n, s) => n + s.concepts.length, 0);
+  setStage(galaxyId, "expand", `${planetCount} planets, ${conceptCount} concepts`);
+
+  // Planets and concepts both feed into the shared Pro limiter, so
+  // `Promise.all` here does NOT double the in-flight slot count —
+  // the limiter keeps total Pro calls at <= PRO_CONCURRENCY.
+  await Promise.all([
+    runExpandPlanetsStage(ctx, budget, proLimiter),
+    runExpandConceptsStage(ctx, budget, proLimiter),
+  ]);
+  persist(galaxyId);
+
+  setStage(galaxyId, "stories", "pitching");
+  await runStoryPitchesStage(ctx, budget);
+
+  setStage(
+    galaxyId,
+    "stories",
+    `writing ${ctx.stories.length} stor${ctx.stories.length === 1 ? "y" : "ies"}`,
+  );
+  await runWriteStoriesStage(ctx, budget, proLimiter);
+  persist(galaxyId);
 }
