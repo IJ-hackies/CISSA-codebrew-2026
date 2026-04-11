@@ -129,12 +129,10 @@ import OnboardingTooltip from '@/components/OnboardingTooltip.vue'
 import { createDrawerStack } from '@/composables/useDrawerStack'
 import { useIsMobile } from '@/composables/useIsMobile'
 
-import galaxyFixture from '@/fixtures/galaxy-data.json'
-
 // ── Store & route ─────────────────────────────────────────────────────────────
 const route  = useRoute()
 const router = useRouter()
-const { data: meshData, galaxyId, visitedPlanetIds, collectedConceptIds, markPlanetVisited, collectConcept, loadFromFixture, getOrGenerateSystemPreset } = useMeshStore()
+const { data: meshData, galaxyId, visitedPlanetIds, collectedConceptIds, markPlanetVisited, collectConcept, loadFromApi, getOrGenerateSystemPreset } = useMeshStore()
 
 // ── Onboarding: only show for the user's very first galaxy ────────────────
 const FIRST_GALAXY_KEY = 'ss.firstGalaxyId'
@@ -1695,8 +1693,8 @@ watch(currentRightPlanet, (next, prev) => {
   }
 })
 
-onMounted(() => {
-  if (!meshData.value) loadFromFixture(galaxyFixture, (route.params.id as string) ?? 'fixture')
+onMounted(async () => {
+  if (!meshData.value) await loadFromApi((route.params.id as string) ?? 'fixture')
   if (!containerRef.value) return
 
   const mobileInit = window.innerWidth < 768

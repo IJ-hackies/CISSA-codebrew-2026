@@ -20,7 +20,12 @@
 
 import { ref } from 'vue'
 import type { GalaxyData } from '@scholarsystem/shared'
-import { fetchMeshData, loadMeshFromJson } from './meshApi'
+import {
+  fetchGalaxyEnvelope,
+  loadMeshFromJson,
+  type GalaxyEnvelope,
+  type GalaxyJobStatus,
+} from './meshApi'
 
 const FIXTURE_ID = '__fixture__'
 
@@ -70,6 +75,9 @@ function persistPresetMap(key: string, presets: Record<string, string>) {
 
 const current = ref<GalaxyData | null>(null)
 const galaxyId = ref<string>(FIXTURE_ID)
+const status = ref<GalaxyJobStatus>('complete')
+const stageDetail = ref<string>('')
+const error = ref<string | null>(null)
 const visitedPlanetIds = ref<Set<string>>(new Set())
 const collectedConceptIds = ref<Set<string>>(new Set())
 /**
@@ -78,6 +86,38 @@ const collectedConceptIds = ref<Set<string>>(new Set())
  * shape a given system uses, and so the choice survives page refreshes.
  */
 const systemPresets = ref<Record<string, string>>({})
+let pollTimer: ReturnType<typeof setTimeout> | null = null
+const POLL_INTERVAL_MS = 2500
+
+function stopPolling() {
+  if (!pollTimer) return
+  clearTimeout(pollTimer)
+  pollTimer = null
+}
+
+function applyEnvelope(envelope: GalaxyEnvelope) {
+  current.value = envelope.galaxy
+  galaxyId.value = envelope.id
+  status.value = envelope.status
+  stageDetail.value = envelope.stageDetail
+  error.value = envelope.error
+  hydrateSetsForCurrentGalaxy()
+}
+
+function schedulePoll(id: string) {
+  stopPolling()
+  pollTimer = setTimeout(async () => {
+    try {
+      const envelope = await fetchGalaxyEnvelope(id)
+      applyEnvelope(envelope)
+      if (envelope.status !== 'complete' && envelope.status !== 'error') {
+        schedulePoll(id)
+      }
+    } catch {
+      schedulePoll(id)
+    }
+  }, POLL_INTERVAL_MS)
+}
 
 /** Load persisted sets for the active galaxy id, filtering out ids that
  *  no longer exist in the loaded data. */
@@ -124,11 +164,13 @@ function hydrateSetsForCurrentGalaxy() {
 export function useMeshStore() {
   /** Load GalaxyData from the mesh parser API. */
   async function loadFromApi(id: string): Promise<GalaxyData> {
-    const data = await fetchMeshData(id)
-    current.value = data
-    galaxyId.value = id
-    hydrateSetsForCurrentGalaxy()
-    return data
+    stopPolling()
+    const envelope = await fetchGalaxyEnvelope(id)
+    applyEnvelope(envelope)
+    if (envelope.status !== 'complete' && envelope.status !== 'error') {
+      schedulePoll(id)
+    }
+    return envelope.galaxy
   }
 
   /**
@@ -137,15 +179,23 @@ export function useMeshStore() {
    * fixture id so dev work without a real id still persists consistently.
    */
   function loadFromFixture(json: unknown, id: string = FIXTURE_ID): GalaxyData {
+    stopPolling()
     const data = loadMeshFromJson(json)
     current.value = data
     galaxyId.value = id
+    status.value = 'complete'
+    stageDetail.value = ''
+    error.value = null
     hydrateSetsForCurrentGalaxy()
     return data
   }
 
   function clear() {
+    stopPolling()
     current.value = null
+    status.value = 'complete'
+    stageDetail.value = ''
+    error.value = null
     visitedPlanetIds.value = new Set()
     collectedConceptIds.value = new Set()
   }
@@ -198,6 +248,9 @@ export function useMeshStore() {
   return {
     data: current,
     galaxyId,
+    status,
+    stageDetail,
+    error,
     visitedPlanetIds,
     collectedConceptIds,
     loadFromApi,

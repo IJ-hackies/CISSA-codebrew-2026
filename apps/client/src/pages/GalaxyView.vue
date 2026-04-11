@@ -84,12 +84,10 @@ import OnboardingTooltip from '@/components/OnboardingTooltip.vue'
 import StoryReader from '@/components/StoryReader.vue'
 import type { UUID } from '@/lib/meshApi'
 
-import galaxyFixture from '@/fixtures/galaxy-data.json'
-
 // ── Store ─────────────────────────────────────────────────────────────────────
 const router = useRouter()
 const route  = useRoute()
-const { data: meshData, galaxyId, visitedPlanetIds, loadFromFixture, getOrGenerateSystemPreset } = useMeshStore()
+const { data: meshData, galaxyId, visitedPlanetIds, loadFromApi, getOrGenerateSystemPreset } = useMeshStore()
 
 // ── Onboarding: only show for the user's very first galaxy ────────────────
 const FIRST_GALAXY_KEY = 'ss.firstGalaxyId'
@@ -924,9 +922,9 @@ function onClick(e: MouseEvent) {
 // ── Lifecycle ──────────────────────────────────────────────────────────────────
 const { triggerWarp } = useWarpEffect()
 
-onMounted(() => {
+onMounted(async () => {
   const gid = (route.params.id as string) ?? 'fixture'
-  loadFromFixture(galaxyFixture, gid)
+  await loadFromApi(gid)
   // Record the very first galaxy the user ever visits
   if (!localStorage.getItem(FIRST_GALAXY_KEY)) {
     localStorage.setItem(FIRST_GALAXY_KEY, gid)
