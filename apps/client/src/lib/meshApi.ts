@@ -150,7 +150,7 @@ export interface GalaxyRowSummary {
 }
 
 export async function deleteGalaxy(id: string): Promise<void> {
-  const res = await fetch(`/api/galaxy/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  const res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(id)}`, { method: 'DELETE' })
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
     try {
@@ -162,7 +162,7 @@ export async function deleteGalaxy(id: string): Promise<void> {
 }
 
 export async function fetchGalaxyList(): Promise<GalaxyRowSummary[]> {
-  const res = await fetch('/api/galaxy')
+  const res = await fetch(`${API_BASE}/api/galaxy`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = (await res.json()) as { galaxies: GalaxyRowSummary[] }
   return body.galaxies
@@ -179,9 +179,9 @@ export async function appendGalaxy(id: string, input: CreateGalaxyInput): Promis
     for (const f of input.files!) form.append('file', f, f.name)
     if (input.title) form.append('title', input.title)
     if (input.text) form.append('text', input.text)
-    res = await fetch(`/api/galaxy/${encodeURIComponent(id)}/append`, { method: 'POST', body: form })
+    res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(id)}/append`, { method: 'POST', body: form })
   } else {
-    res = await fetch(`/api/galaxy/${encodeURIComponent(id)}/append`, {
+    res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(id)}/append`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: input.text, title: input.title, filename: input.filename }),
@@ -211,7 +211,7 @@ export interface Submission {
 }
 
 export async function fetchSubmissions(galaxyId: string): Promise<Submission[]> {
-  const res = await fetch(`/api/galaxy/${encodeURIComponent(galaxyId)}/submissions`)
+  const res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(galaxyId)}/submissions`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = (await res.json()) as { submissions: Submission[] }
   return body.submissions
@@ -271,7 +271,7 @@ export async function fetchGallery(
   const params = new URLSearchParams()
   if (sort !== 'newest') params.set('sort', sort)
   if (q) params.set('q', q)
-  const url = `/api/gallery${params.size ? `?${params}` : ''}`
+  const url = `${API_BASE}/api/gallery${params.size ? `?${params}` : ''}`
   const res = await fetch(url)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = (await res.json()) as { cards: GalleryCard[] }
@@ -284,7 +284,7 @@ export async function publishToTaco(
 ): Promise<void> {
   const ownerToken = getOwnerToken(galaxyId)
   if (!ownerToken) throw new Error('no owner token for this galaxy')
-  const res = await fetch('/api/gallery/publish', {
+  const res = await fetch(`${API_BASE}/api/gallery/publish`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ galaxyId, ownerToken, tagline }),
@@ -298,7 +298,7 @@ export async function publishToTaco(
 export async function unpublishFromTaco(galaxyId: string): Promise<void> {
   const ownerToken = getOwnerToken(galaxyId)
   if (!ownerToken) throw new Error('no owner token for this galaxy')
-  const res = await fetch('/api/gallery/unpublish', {
+  const res = await fetch(`${API_BASE}/api/gallery/unpublish`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ galaxyId, ownerToken }),
@@ -312,7 +312,7 @@ export async function updateTacoTagline(
 ): Promise<void> {
   const ownerToken = getOwnerToken(galaxyId)
   if (!ownerToken) throw new Error('no owner token for this galaxy')
-  const res = await fetch(`/api/gallery/${encodeURIComponent(galaxyId)}/tagline`, {
+  const res = await fetch(`${API_BASE}/api/gallery/${encodeURIComponent(galaxyId)}/tagline`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ownerToken, tagline }),
@@ -327,7 +327,7 @@ export async function reconcileOwnership(): Promise<void> {
   const owned = getAllOwnedPairs()
   if (owned.length === 0) return
   try {
-    await fetch('/api/gallery/reconcile', {
+    await fetch(`${API_BASE}/api/gallery/reconcile`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ owned }),
