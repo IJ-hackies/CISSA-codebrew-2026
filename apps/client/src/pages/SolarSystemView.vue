@@ -202,6 +202,7 @@ let occlusionRay: THREE.Raycaster
 let mouse: THREE.Vector2
 const planetMeshes    = new Map<string, THREE.Mesh>()
 const connectionLines = new Map<string, THREE.Line[]>() // keyed by planet id
+let sunSpokeLines: THREE.Line[] = []
 let clickableMeshes: THREE.Mesh[] = []
 let occlusionMeshes: THREE.Mesh[] = []  // planets + sun for occlusion testing
 
@@ -929,6 +930,7 @@ function buildScene() {
   planetMeshes.clear()
   connectionLines.clear()
   activePlanetLines = []
+  sunSpokeLines = []
   soulMeshes.clear()
   soulBasePos.clear()
   soulPhases.clear()
@@ -1127,6 +1129,28 @@ function buildScene() {
     const existing = connectionLines.get(planetId) ?? []
     connectionLines.set(planetId, [...existing, ...lines])
   })
+
+  // ── Sun spoke lines (origin → each planet, thin solid white) ─────────────
+  {
+    const spokeMat = new THREE.LineBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.18,
+      depthWrite: false,
+    })
+    sys.planets.forEach((planetId) => {
+      const mesh = planetMeshes.get(planetId)
+      if (!mesh) return
+      const geo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        mesh.position.clone(),
+      ])
+      const ln = new THREE.Line(geo, spokeMat.clone())
+      ln.userData = { clearable: true, isSpoke: true }
+      scene.add(ln)
+      sunSpokeLines.push(ln)
+    })
+  }
 
   // ── Concepts (3D soul sprites) ────────────────────────────────────────────
   const concepts = sys.concepts
@@ -1348,8 +1372,8 @@ function closeRight() {
   if (sceneCtx) {
     sceneCtx.controls.enabled = true
     const tl = gsap.timeline({ onUpdate: () => { sceneCtx!.controls.update() } })
-    tl.to(sceneCtx.camera.position, { x: 0, y: 0, z: 85, duration: 0.6, ease: 'power2.inOut' }, 0)
-    tl.to(sceneCtx.controls.target,  { x: 0, y: 0, z: 0,  duration: 0.6, ease: 'power2.inOut' }, 0)
+    tl.to(sceneCtx.camera.position, { x: 0, y: 0, z: 85, duration: 1.1, ease: 'power1.out' }, 0)
+    tl.to(sceneCtx.controls.target,  { x: 0, y: 0, z: 0,  duration: 1.1, ease: 'power1.out' }, 0)
   }
 }
 
@@ -1363,8 +1387,8 @@ function popRight() {
     // Stack empty — zoom back out
     sceneCtx.controls.enabled = true
     const tl = gsap.timeline({ onUpdate: () => { sceneCtx!.controls.update() } })
-    tl.to(sceneCtx.camera.position, { x: 0, y: 0, z: 85, duration: 0.6, ease: 'power2.inOut' }, 0)
-    tl.to(sceneCtx.controls.target,  { x: 0, y: 0, z: 0,  duration: 0.6, ease: 'power2.inOut' }, 0)
+    tl.to(sceneCtx.camera.position, { x: 0, y: 0, z: 85, duration: 1.1, ease: 'power1.out' }, 0)
+    tl.to(sceneCtx.controls.target,  { x: 0, y: 0, z: 0,  duration: 1.1, ease: 'power1.out' }, 0)
   }
 }
 
@@ -1569,8 +1593,8 @@ function onStoryOpened() {
   if (sceneCtx) {
     sceneCtx.controls.enabled = true
     const tl = gsap.timeline({ onUpdate: () => { sceneCtx!.controls.update() } })
-    tl.to(sceneCtx.camera.position, { x: 0, y: 0, z: 85, duration: 0.6, ease: 'power2.inOut' }, 0)
-    tl.to(sceneCtx.controls.target,  { x: 0, y: 0, z: 0,  duration: 0.6, ease: 'power2.inOut' }, 0)
+    tl.to(sceneCtx.camera.position, { x: 0, y: 0, z: 85, duration: 1.1, ease: 'power1.out' }, 0)
+    tl.to(sceneCtx.controls.target,  { x: 0, y: 0, z: 0,  duration: 1.1, ease: 'power1.out' }, 0)
   }
 }
 
@@ -1688,8 +1712,16 @@ watch(currentRightPlanet, (next, prev) => {
     lines.forEach((ln) => {
       gsap.to((ln.material as THREE.ShaderMaterial).uniforms.uOpacity, { value: 0.75, duration: 0.5, ease: 'power2.out' })
     })
+    // Hide sun spokes when a planet is selected
+    sunSpokeLines.forEach((ln) => {
+      gsap.to(ln.material as THREE.LineBasicMaterial, { opacity: 0, duration: 0.3, ease: 'power2.in' })
+    })
   } else {
     activePlanetLines = []
+    // Restore sun spokes when no planet is selected
+    sunSpokeLines.forEach((ln) => {
+      gsap.to(ln.material as THREE.LineBasicMaterial, { opacity: 0.18, duration: 0.5, ease: 'power2.out' })
+    })
   }
 })
 

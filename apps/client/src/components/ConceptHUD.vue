@@ -220,7 +220,8 @@ function onSlotClick(conceptId: UUID, e: MouseEvent) {
  * knows where to aim. Used by SolarSystemView's GSAP fly-in.
  */
 function getTargetRect(): DOMRect | null {
-  return slotsRef.value?.getBoundingClientRect() ?? null
+  // slotsRef is inside v-if="!collapsed" — fall back to the root panel when collapsed
+  return slotsRef.value?.getBoundingClientRect() ?? hudRootEl.value?.getBoundingClientRect() ?? null
 }
 
 defineExpose({ getTargetRect, collected })

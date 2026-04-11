@@ -12,8 +12,8 @@
 </template>
 
 <style>
-.void-fade-enter-active { transition: opacity 80ms ease; }
-.void-fade-leave-active { transition: opacity 80ms ease; }
+.void-fade-enter-active { transition: opacity 300ms ease; }
+.void-fade-leave-active { transition: opacity 600ms ease; }
 .void-fade-enter-from   { opacity: 0; }
 .void-fade-leave-to     { opacity: 0; }
 </style>

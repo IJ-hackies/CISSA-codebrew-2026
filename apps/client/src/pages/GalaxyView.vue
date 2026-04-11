@@ -962,8 +962,9 @@ onMounted(async () => {
   buildGraph()
   loading.value = false
 
-  // Arrival: just fade the veil out — warp already played during departure from SolarSystemView
-  if (veilRef.value) gsap.fromTo(veilRef.value, { opacity: 1 }, { opacity: 0, duration: 0.5, ease: 'power1.out' })
+  // Arrival: fade veil out — slower when coming fresh from ChatLanding so the
+  // galaxy emerges cinematically rather than popping in.
+  if (veilRef.value) gsap.fromTo(veilRef.value, { opacity: 1 }, { opacity: 0, duration: 0.9, ease: 'power1.out' })
 
   // No mousemove on mobile — taps would briefly fire it and flash the
   // hover tooltip ("little div") on every system tap.
