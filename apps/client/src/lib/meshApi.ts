@@ -10,6 +10,8 @@
  *   const data = loadMeshFromJson(fixture)
  */
 
+const API_BASE = import.meta.env.VITE_API_URL ?? ''
+
 import type { GalaxyData } from '@scholarsystem/shared'
 
 // Re-export types so frontend components can import from one place
@@ -66,9 +68,9 @@ export async function createGalaxy(input: CreateGalaxyInput): Promise<GalaxyEnve
     for (const f of input.files!) form.append('file', f, f.name)
     if (input.title) form.append('title', input.title)
     if (input.text) form.append('text', input.text)
-    res = await fetch('/api/galaxy/create', { method: 'POST', body: form })
+    res = await fetch(`${API_BASE}/api/galaxy/create`, { method: 'POST', body: form })
   } else {
-    res = await fetch('/api/galaxy/create', {
+    res = await fetch(`${API_BASE}/api/galaxy/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -101,7 +103,7 @@ export async function createGalaxy(input: CreateGalaxyInput): Promise<GalaxyEnve
 }
 
 export async function fetchGalaxyEnvelope(id: string): Promise<GalaxyEnvelope> {
-  const res = await fetch(`/api/galaxy/${encodeURIComponent(id)}`)
+  const res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(id)}`)
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
     try {

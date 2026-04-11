@@ -1,10 +1,12 @@
 /**
  * Thin fetch wrapper for the Stella Taco backend API.
  *
- * Uses relative URLs — the Vite dev server proxies `/api/*` to the Bun
- * backend (see vite.config.ts). In production the frontend is served by
- * the same origin as the API, so relative URLs keep working.
+ * Uses relative URLs by default — the Vite dev server proxies `/api/*` to
+ * the Bun backend (see vite.config.ts). Set VITE_API_URL to point at a
+ * remote backend (e.g. "http://134.199.156.237:8889") for split deploys.
  */
+
+const API_BASE = import.meta.env.VITE_API_URL ?? ''
 
 /**
  * Minimal shape of what the frontend currently consumes from a Galaxy blob.
@@ -47,10 +49,10 @@ export async function createGalaxy(input: CreateGalaxyInput): Promise<GalaxyBlob
     for (const f of input.files!) form.append('file', f, f.name)
     if (input.title) form.append('title', input.title)
     if (input.text) form.append('text', input.text)
-    res = await fetch('/api/galaxy/create', { method: 'POST', body: form })
+    res = await fetch(`${API_BASE}/api/galaxy/create`, { method: 'POST', body: form })
   } else {
     // JSON paste path unchanged.
-    res = await fetch('/api/galaxy/create', {
+    res = await fetch(`${API_BASE}/api/galaxy/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -74,7 +76,7 @@ export async function createGalaxy(input: CreateGalaxyInput): Promise<GalaxyBlob
 }
 
 export async function getGalaxy(id: string): Promise<GalaxyBlob> {
-  const res = await fetch(`/api/galaxy/${encodeURIComponent(id)}`)
+  const res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(id)}`)
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}`)
   }
@@ -88,7 +90,7 @@ export async function getGalaxy(id: string): Promise<GalaxyBlob> {
  */
 export async function getScene(galaxyId: string, bodyId: string): Promise<unknown | null> {
   const res = await fetch(
-    `/api/galaxy/${encodeURIComponent(galaxyId)}/scene/${encodeURIComponent(bodyId)}`,
+    `${API_BASE}/api/galaxy/${encodeURIComponent(galaxyId)}/scene/${encodeURIComponent(bodyId)}`,
   )
   if (res.status === 404) return null
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -101,7 +103,7 @@ export async function getScene(galaxyId: string, bodyId: string): Promise<unknow
  */
 export async function generateScene(galaxyId: string, bodyId: string): Promise<unknown> {
   const res = await fetch(
-    `/api/galaxy/${encodeURIComponent(galaxyId)}/scene/${encodeURIComponent(bodyId)}/generate`,
+    `${API_BASE}/api/galaxy/${encodeURIComponent(galaxyId)}/scene/${encodeURIComponent(bodyId)}/generate`,
     { method: 'POST' },
   )
   if (!res.ok) {

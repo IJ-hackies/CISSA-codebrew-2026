@@ -1,52 +1,69 @@
-## PLS READ OMG
+# Scholar System
 
-1. **Get context fast.** Run the `/recontext` skill in Claude Code. It reads the relevant context files. If you don't know anything about this project, run recontext then ask claude
-2. **Read `.context/ABOUT.md` yourself too.** Almost all details about this project and how it works is in there
-3. **`.claude/` and `.context/` live at the repo root.** Project code lives in `apps/` and `packages/`.
-4. **When you finish a feature, tell Claude "update progress.md".** `.context/PROGRESS.md` is our living log of what's done across the four pipeline stages. You can also use `/reupdate` which does that too.
+An AI-powered platform that transforms uploaded content — PDFs, lecture notes, journals, transcripts, and more — into a navigable 3D galaxy. The system parses source material into structured knowledge nodes, generates long-form character-driven narratives that thread through them, and renders the result as an interactive Three.js cosmos.
 
-## Prerequisites
+Built for **Codebrew 2026** by Team Gin (University of Melbourne).
 
-Install these before you touch the code:
+## Overview
 
-- **[Bun](https://bun.sh/)**
-- **[Node.js](https://nodejs.org/)**
-- **[Claude Code](https://docs.claude.com/en/docs/claude-code)** 
-- **Git** 
+Users upload documents, and a three-stage AI pipeline processes them into a **markdown mesh** — a workspace of typed markdown files that serve as the source of truth:
 
-## Tech stack
+1. **Ingest** — Parse uploaded files into `(Source)` summaries
+2. **Structure** — Discover `(Solar System)` groupings, `(Planet)` knowledge nodes, and `(Concept)` thematic connections
+3. **Stories** — Generate `(Story)` files: thousands-of-words narrative arcs where a character journeys across planets
 
-**Frontend (Vue + Vite)** — Vue 3, Vite, TypeScript, Tailwind, Vue Router, HTML Canvas / SVG for galaxy & scene rendering. (cos vue is good for animation frontend apparently)
+The galaxy is then rendered as a 3D force-directed graph with three zoom levels: galaxy overview, solar system drill-down, and an inline story reader.
 
-**Backend (Bun + Hono)** — Bun runtime, Hono web framework, TypeScript, SQLite (via Bun built-in) for storage. (bun fast, fast is nice)
+## Tech Stack
 
-**AI / content** — abuse claude code + sonnet 4.6 for structure extraction, galaxy theming, and streamed scene generation. `pdf-parse` for PDF ingest.
+| Layer | Technologies |
+|-------|-------------|
+| **Frontend** | Vue 3, Vite, TypeScript, Tailwind CSS v4, Vue Router, Three.js, D3 Force-3D, GSAP |
+| **Backend** | Bun, Hono, TypeScript, SQLite (metadata/cache) |
+| **AI Pipeline** | Gemini API for content generation and structure extraction |
+| **Shared** | TypeScript types via Zod schemas in `packages/shared/` |
 
-**Deployment** — we figure out later lol, gonna need to deploy a seperate proxy server to host a claude code instance as well
+Deliberately omitted: accounts/auth, Redis, Postgres, S3, AI image generation, WebSockets. UUIDs serve as access keys; SSE provides pipeline progress updates.
 
-Deliberately **not** using: accounts/auth, Redis, Postgres, S3, AI image gen, WebSockets. See ABOUT.md for the reasoning.
-
-## File structure
+## Project Structure
 
 ```
 .
-├── .claude/                  # Claude Code config, skills
-├── .context/                 # Project context (ABOUT.md — read this)
+├── .claude/                  # Claude Code configuration and skills
+├── .context/                 # Project context documentation
 ├── apps/
-│   ├── client/               # Vue 3 frontend (components, composables, lib, types)
-│   ├── server/               # Bun + Hono backend (routes, pipeline, prompts, db, lib)
-│   └── proxy/                # Proxy server for Claude Code worker pool (VPS)
+│   ├── client/               # Vue 3 + Three.js frontend
+│   ├── server-gemini/        # Bun + Hono backend (active — API, pipeline, mesh parsing)
+│   ├── server/               # Legacy backend (deprecated)
+│   └── proxy/                # Proxy server for worker pool (VPS deployment)
 └── packages/
-    └── shared/               # Shared TypeScript types (Zod schemas)
+    └── shared/               # Shared TypeScript type definitions
 ```
 
-## Running
+## Prerequisites
+
+- [Bun](https://bun.sh/)
+- [Node.js](https://nodejs.org/)
+- Git
+
+## Getting Started
 
 ```bash
-bun install              # install all workspace deps
-bun run dev              # start client + server concurrently
-bun run dev:client       # start client only (port 8888)
-bun run dev:server       # start server only (port 8889)
-bun run dev:proxy        # start proxy only (port 8890)
-bun run build            # build client for production
+bun install              # Install all workspace dependencies
+bun run dev              # Start client + server concurrently
 ```
+
+Individual services:
+
+```bash
+bun run dev:client       # Frontend only (port 8888)
+bun run dev:server       # Backend only (port 8889)
+bun run dev:proxy        # Proxy only (port 8890)
+bun run build            # Production build (client)
+```
+
+## Development Notes
+
+- The frontend proxies `/api/*` requests from port `8888` to the backend on port `8889`.
+- Detailed project context, architecture decisions, and progress tracking are in `.context/ABOUT.md`.
+- Claude Code skills are configured in `.claude/` — run `/recontext` to load project context into a Claude Code session.
