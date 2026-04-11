@@ -39,6 +39,43 @@ export async function mapLimited<T, R>(
   return Promise.all(items.map((item, i) => limiter(() => fn(item, i))));
 }
 
+// Fan-out through an externally-provided limiter. Lets multiple stages
+// share a single Pro-quota pool so simultaneous stages (e.g. expand
+// planets + expand concepts) don't blow past quota together.
+export async function mapViaLimiter<T, R>(
+  items: T[],
+  limiter: Limiter,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  return Promise.all(items.map((item, i) => limiter(() => fn(item, i))));
+}
+
+// Tolerant variant of `mapViaLimiter` — catches per-item errors, logs
+// them, and returns only the successes plus a failure count.
+export async function mapViaLimiterTolerant<T, R>(
+  items: T[],
+  limiter: Limiter,
+  label: string,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<{ results: R[]; failed: number }> {
+  const results: R[] = [];
+  let failed = 0;
+  await Promise.all(
+    items.map((item, i) =>
+      limiter(async () => {
+        try {
+          results.push(await fn(item, i));
+        } catch (err) {
+          failed++;
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[${label}:${i}] ${msg.slice(0, 300)}`);
+        }
+      }),
+    ),
+  );
+  return { results, failed };
+}
+
 // Like mapLimited, but catches per-item errors, logs them, and returns
 // only the successful results. Use when one failed item shouldn't kill
 // a whole stage — e.g. ingesting 1000 files where one happens to make

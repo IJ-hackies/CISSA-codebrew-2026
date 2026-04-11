@@ -21,7 +21,9 @@ export type LlmPart =
   | { text: string }
   | { inlineData: { data: string; mimeType: string } };
 
+export const MODEL_FLASH_LITE = "gemini-2.5-flash-lite";
 export const MODEL_FLASH = "gemini-2.5-flash";
+export const MODEL_FLASH_PREVIEW = "gemini-3-flash-preview";
 export const MODEL_PRO = "gemini-2.5-pro";
 
 // Default ceilings when the caller doesn't pass one. Flash needs a lot
