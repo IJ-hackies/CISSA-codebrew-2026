@@ -24,6 +24,7 @@ import {
   Color,
   Clock,
   Fog,
+  Vector2,
 } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
@@ -152,7 +153,7 @@ export function useThreeScene(
   const composer = new EffectComposer(renderer)
   composer.addPass(new RenderPass(scene, camera))
   const bloomPass = new UnrealBloomPass(
-    { x: w, y: h } as any,
+    new Vector2(w, h),
     bloomStrength,
     bloomRadius,
     bloomThreshold,

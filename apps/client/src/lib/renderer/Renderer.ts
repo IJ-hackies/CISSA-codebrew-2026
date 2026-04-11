@@ -307,7 +307,7 @@ export class GalaxyRenderer implements RendererPublicAPI {
    *
    * Resolves when the ramp-up is done and cruise begins.
    */
-  launchRocket(_originCanvasPx: { x: number; y: number }): Promise<void> {
+  launchRocket(): Promise<void> {
     return new Promise((resolve) => {
       const centerX = this.width / 2
       const centerY = this.height / 2

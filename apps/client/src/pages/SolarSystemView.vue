@@ -415,7 +415,7 @@ function buildSolarSystem() {
 }
 
 // ── Per-frame animation ───────────────────────────────────────────────────────
-function onFrame(_elapsed: number) {
+function onFrame() {
   // Self-rotation per entry (kind-based speeds)
   entryMeshMap.forEach((mesh) => {
     mesh.rotation.y += 0.004
@@ -489,7 +489,21 @@ function onClick(e: MouseEvent) {
   sceneCtx.controls.enabled = false
   const tl = gsap.timeline({ onComplete: () => {
     // Mark as visited
-    if (galaxy.value?.exploration) galaxy.value.exploration.visited[entry.id] = true
+    if (galaxy.value?.exploration) {
+      const now = Date.now()
+      const previous = galaxy.value.exploration.visited[entry.id]
+      galaxy.value.exploration.visited[entry.id] = previous
+        ? {
+            firstVisitedAt: previous.firstVisitedAt,
+            lastVisitedAt: now,
+            visitCount: previous.visitCount + 1,
+          }
+        : {
+            firstVisitedAt: now,
+            lastVisitedAt: now,
+            visitCount: 1,
+          }
+    }
     selectedEntry.value = entry
     selectedWrap.value  = wrap as EntryWrap
   }})
@@ -551,7 +565,7 @@ onMounted(async () => {
 
   const originalRender = sceneCtx.composer.render.bind(sceneCtx.composer)
   sceneCtx.composer.render = function () {
-    onFrame(sceneCtx!.clock.getElapsedTime())
+    onFrame()
     originalRender()
   }
 

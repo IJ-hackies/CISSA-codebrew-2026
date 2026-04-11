@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   createWorkspace,
   destroyWorkspace,
@@ -50,7 +50,7 @@ sessionRoutes.post("/:id/files", async (c) => {
   if (body.files) {
     const writes = Object.entries(body.files).map(async ([relPath, content]) => {
       const absPath = join(dir, relPath);
-      await mkdir(join(absPath, ".."), { recursive: true });
+      await mkdir(dirname(absPath), { recursive: true });
       await writeFile(absPath, content, "utf-8");
     });
     await Promise.all(writes);
@@ -60,7 +60,7 @@ sessionRoutes.post("/:id/files", async (c) => {
   if (body.binaryFiles) {
     const writes = Object.entries(body.binaryFiles).map(async ([relPath, b64]) => {
       const absPath = join(dir, relPath);
-      await mkdir(join(absPath, ".."), { recursive: true });
+      await mkdir(dirname(absPath), { recursive: true });
       await writeFile(absPath, Buffer.from(b64, "base64"));
     });
     await Promise.all(writes);

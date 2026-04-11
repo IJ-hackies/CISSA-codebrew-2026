@@ -15,6 +15,7 @@ import {
 } from '@/lib/recentGalaxies'
 import { createGalaxy } from '@/lib/api'
 import { useGalaxyStore } from '@/lib/galaxyStore'
+import type { Galaxy } from '@/lib/galaxyTypes'
 
 const router = useRouter()
 const isMobile = useIsMobile()
@@ -169,7 +170,7 @@ const placeholderTitle = computed(() => {
 // cruise just waits on the network promise.
 const MIN_CRUISE_MS = 2500
 
-async function handleSubmit(origin: { x: number; y: number }) {
+async function handleSubmit() {
   if (launching.value) return
 
   // Accept any combination of: one or more attached files + pasted text.
@@ -199,9 +200,8 @@ async function handleSubmit(origin: { x: number; y: number }) {
     })
 
     if (renderer) {
-      // Tell the renderer where the DOM rocket lives so it can take over
-      // from the same screen position. (DOM button fades via .launching class.)
-      await renderer.launchRocket(origin)
+      // Launch the canvas rocket while the DOM button fades via .launching.
+      await renderer.launchRocket()
     }
 
     // Wait for BOTH: the pipeline result and a minimum cruise feel.
@@ -217,7 +217,7 @@ async function handleSubmit(origin: { x: number; y: number }) {
     }
 
     // Store the full blob so GalaxyMap can read it without re-fetching.
-    if (galaxy) setGalaxy(galaxy as any)
+    if (galaxy) setGalaxy(galaxy as Galaxy)
 
     const entry: GalaxyEntry = {
       uuid: galaxy?.meta?.id,

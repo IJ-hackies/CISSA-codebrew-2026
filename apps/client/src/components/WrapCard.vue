@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <Transition name="wrap-appear">
-      <div class="wrap-overlay" @click.self="$emit('close')">
+      <div v-if="wrap" class="wrap-overlay" @click.self="$emit('close')">
         <div
           class="wrap-card"
           :style="{ '--accent': wrap?.color ?? '#7c9ef8', '--accent-dim': (wrap?.color ?? '#7c9ef8') + '22' }"

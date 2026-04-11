@@ -83,17 +83,16 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import * as THREE from 'three'
 import gsap from 'gsap'
-// @ts-ignore — d3-force-3d lacks full TS declarations
+// @ts-expect-error -- d3-force-3d ships incomplete typings for the 3D helpers we use.
 import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from 'd3-force-3d'
 import { useThreeScene } from '@/composables/useThreeScene'
 import { useWarpEffect } from '@/composables/useWarpEffect'
 import { useGalaxyStore } from '@/lib/galaxyStore'
-import { MOCK_GALAXY } from '@/lib/mockGalaxy'
-import type { Cluster, RelationshipEdge } from '@/lib/galaxyTypes'
+import type { Cluster, PipelineScope, RelationshipEdge } from '@/lib/galaxyTypes'
 
 const route = useRoute()
 const router = useRouter()
-const { galaxy, loadGalaxy, setGalaxy } = useGalaxyStore()
+const { galaxy, loadGalaxy } = useGalaxyStore()
 
 const containerRef = ref<HTMLDivElement>()
 const veilRef      = ref<HTMLDivElement>()
@@ -108,6 +107,13 @@ interface LabelPos { id: string; x: number; y: number; opacity: number; title: s
 const labelPositions = ref<LabelPos[]>([])
 // Store world positions for each labeled mesh so we can project them each frame
 const labelWorldData: Array<{ id: string; mesh: THREE.Mesh; title: string; color: string }> = []
+type PipelineStage = keyof PipelineScope
+const PIPELINE_STAGES: PipelineStage[] = [
+  'ingest',
+  'structure',
+  'wraps',
+  'coverage',
+]
 
 const clusterCount   = computed(() => galaxy.value?.knowledge?.clusters.length ?? 0)
 const entryCount     = computed(() => galaxy.value?.knowledge?.entries.length ?? 0)
@@ -115,38 +121,34 @@ const pipelineRunning = computed(() => {
   const p = galaxy.value?.pipeline
   if (!p) return false
   // Don't show "building" if a stage errored — show error instead.
-  const hasError = ['ingest', 'structure', 'wraps', 'coverage'].some(
-    (k) => (p as any)[k]?.status === 'error',
-  )
+  const hasError = PIPELINE_STAGES.some((stage) => p[stage].status === 'error')
   if (hasError) return false
-  return ['ingest', 'structure', 'wraps', 'coverage'].some(
-    (k) => {
-      const s = (p as any)[k]?.status
-      return s === 'running' || s === 'pending'
-    },
-  )
+  return PIPELINE_STAGES.some((stage) => {
+    const status = p[stage].status
+    return status === 'running' || status === 'pending'
+  })
 })
 const pipelineStageLabel = computed(() => {
   const p = galaxy.value?.pipeline
   if (!p) return 'Building your galaxy…'
-  const labels: Record<string, string> = {
+  const labels: Record<PipelineStage, string> = {
     ingest: 'Reading your memories…',
     structure: 'Discovering connections…',
     wraps: 'Wrapping each memory…',
     coverage: 'Final checks…',
   }
-  for (const k of ['coverage', 'wraps', 'structure', 'ingest']) {
-    const s = (p as any)[k]?.status
-    if (s === 'running') return labels[k]
+  const stageOrder: PipelineStage[] = ['coverage', 'wraps', 'structure', 'ingest']
+  for (const stage of stageOrder) {
+    if (p[stage].status === 'running') return labels[stage]
   }
   return 'Building your galaxy…'
 })
 const pipelineError = computed(() => {
   const p = galaxy.value?.pipeline
   if (!p) return null
-  for (const k of ['ingest', 'structure', 'wraps', 'coverage']) {
-    const stage = (p as any)[k]
-    if (stage?.status === 'error') return { stage: k, message: stage.error }
+  for (const stageName of PIPELINE_STAGES) {
+    const stage = p[stageName]
+    if (stage.status === 'error') return { stage: stageName, message: stage.error }
   }
   return null
 })
@@ -425,9 +427,11 @@ function buildGraph() {
   })
 
   // ── Particle stream edges ─────────────────────────────────────────────────
+  const getLinkEndpointId = (endpoint: string | { id: string }): string =>
+    typeof endpoint === 'string' ? endpoint : endpoint.id
   simLinks.forEach((link) => {
-    const srcNode = nodeIndexMap.get(typeof link.source === 'string' ? link.source : (link.source as any).id)
-    const tgtNode = nodeIndexMap.get(typeof link.target === 'string' ? link.target : (link.target as any).id)
+    const srcNode = nodeIndexMap.get(getLinkEndpointId(link.source))
+    const tgtNode = nodeIndexMap.get(getLinkEndpointId(link.target))
     if (!srcNode || !tgtNode) return
 
     const srcPos = new THREE.Vector3(srcNode.x, srcNode.y, srcNode.z)

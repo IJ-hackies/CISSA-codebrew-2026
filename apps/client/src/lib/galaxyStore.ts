@@ -16,20 +16,24 @@ import { getGalaxy } from './api'
 
 const current = ref<Galaxy | null>(null)
 let pollTimer: ReturnType<typeof setInterval> | null = null
+const PIPELINE_STAGES: Array<keyof Galaxy['pipeline']> = [
+  'ingest',
+  'structure',
+  'wraps',
+  'coverage',
+]
 
 const POLL_INTERVAL_MS = 5000
 
 function shouldPoll(g: Galaxy): boolean {
   const p = g.pipeline
   // Stop polling if any stage errored — the pipeline won't continue.
-  const hasError = ['ingest', 'structure', 'wraps', 'coverage'].some(
-    (k) => (p as any)[k]?.status === 'error',
-  )
+  const hasError = PIPELINE_STAGES.some((stage) => p[stage].status === 'error')
   if (hasError) return false
   // Poll while any stage is still running or pending (not yet started).
-  return ['ingest', 'structure', 'wraps', 'coverage'].some((k) => {
-    const s = (p as any)[k]?.status
-    return s === 'running' || s === 'pending'
+  return PIPELINE_STAGES.some((stage) => {
+    const status = p[stage].status
+    return status === 'running' || status === 'pending'
   })
 }
 

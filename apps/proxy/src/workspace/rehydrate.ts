@@ -1,7 +1,14 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createWorkspace, workspaceDir } from "./manager";
-import type { Galaxy, ConceptDetail } from "@scholarsystem/shared";
+import { createWorkspace } from "./manager";
+import type {
+  Cluster,
+  Entry,
+  Galaxy,
+  Group,
+  RelationshipEdge,
+  Wrap,
+} from "@scholarsystem/shared";
 
 /**
  * Reconstruct a workspace directory from a stored Galaxy blob.
@@ -13,8 +20,7 @@ import type { Galaxy, ConceptDetail } from "@scholarsystem/shared";
  * Writes:
  *   sources/<chapter>/    — one file per source chapter (unit listing)
  *   stage1-structure/     — knowledge notes as frontmatter+markdown
- *   stage2-detail/<topic>/ — detail notes per topic
- *   stage3-narrative/     — canon.md + arcs/<chapter>.md
+ *   stage2-wraps/         — one wrap note per knowledge node
  *
  * Only populates what earlier stages produced (checks pipeline status).
  */
@@ -40,80 +46,37 @@ export async function rehydrateWorkspace(
   }
 
   // --- Stage 1: Structure ---
-  if (blob.knowledge && blob.pipeline.structure.status === "done") {
+  if (blob.knowledge && blob.pipeline.structure.status === "complete") {
     const structDir = join(dir, "stage1-structure");
+    await mkdir(structDir, { recursive: true });
 
-    for (const topic of blob.knowledge.topics) {
-      const content = knowledgeNoteMarkdown("topic", topic);
-      await writeFile(join(structDir, `${topic.id}.md`), content, "utf-8");
-    }
-    for (const subtopic of blob.knowledge.subtopics) {
-      const content = knowledgeNoteMarkdown("subtopic", subtopic);
-      await writeFile(
-        join(structDir, `${subtopic.id}.md`),
-        content,
-        "utf-8",
-      );
-    }
-    for (const concept of blob.knowledge.concepts) {
-      const content = knowledgeNoteMarkdown("concept", concept);
-      await writeFile(
-        join(structDir, `${concept.id}.md`),
-        content,
-        "utf-8",
-      );
+    const linksBySource = buildLinksBySource(blob.relationships.edges);
+    const notes = [
+      ...blob.knowledge.clusters.map((cluster) =>
+        structureNoteMarkdown(cluster, linksBySource.get(cluster.id) ?? []),
+      ),
+      ...blob.knowledge.groups.map((group) =>
+        structureNoteMarkdown(group, linksBySource.get(group.id) ?? []),
+      ),
+      ...blob.knowledge.entries.map((entry) =>
+        structureNoteMarkdown(entry, linksBySource.get(entry.id) ?? []),
+      ),
+    ];
+
+    for (const note of notes) {
+      await writeFile(join(structDir, `${note.id}.md`), note.content, "utf-8");
     }
   }
 
-  // --- Stage 2: Detail ---
-  if (blob.pipeline.detail.status === "done") {
-    for (const [conceptId, detail] of Object.entries(blob.detail)) {
-      if (!detail) continue;
+  // --- Stage 2: Wraps ---
+  if (blob.pipeline.wraps.status === "complete") {
+    const wrapDir = join(dir, "stage2-wraps");
+    await mkdir(wrapDir, { recursive: true });
 
-      // Find the parent topic for this concept to determine the subfolder
-      const concept = blob.knowledge?.concepts.find(
-        (c: { id: string }) => c.id === conceptId,
-      );
-      if (!concept) continue;
-
-      const subtopic = blob.knowledge?.subtopics.find((s: { conceptIds: string[] }) =>
-        s.conceptIds.includes(concept.id),
-      );
-      const topic = subtopic
-        ? blob.knowledge?.topics.find((t: { subtopicIds: string[] }) =>
-            t.subtopicIds.includes(subtopic.id),
-          )
-        : null;
-
-      const topicDir = join(
-        dir,
-        "stage2-detail",
-        topic?.id ?? "uncategorized",
-      );
-      await mkdir(topicDir, { recursive: true });
+    for (const wrap of Object.values(blob.wraps)) {
       await writeFile(
-        join(topicDir, `${conceptId}.md`),
-        detailNoteMarkdown(detail as ConceptDetail),
-        "utf-8",
-      );
-    }
-  }
-
-  // --- Stage 3: Narrative ---
-  if (blob.narrative.canon && blob.pipeline.narrative.status === "done") {
-    const narrativeDir = join(dir, "stage3-narrative");
-    await writeFile(
-      join(narrativeDir, "canon.md"),
-      canonMarkdown(blob.narrative.canon),
-      "utf-8",
-    );
-
-    const arcsDir = join(narrativeDir, "arcs");
-    await mkdir(arcsDir, { recursive: true });
-    for (const arc of blob.narrative.arcs) {
-      await writeFile(
-        join(arcsDir, `${arc.chapter}.md`),
-        arcMarkdown(arc),
+        join(wrapDir, `${wrap.nodeId}.md`),
+        wrapNoteMarkdown(wrap),
         "utf-8",
       );
     }
@@ -126,51 +89,86 @@ export async function rehydrateWorkspace(
 // These produce the Obsidian-style frontmatter+body format that Claude
 // Code reads natively. The compile step (server-side) parses them back.
 
-function knowledgeNoteMarkdown(
-  level: "topic" | "subtopic" | "concept",
-  node: { id: string; title: string; chapter: string; sourceRefs: string[] } & Record<string, unknown>,
-): string {
+function buildLinksBySource(edges: RelationshipEdge[]): Map<string, string[]> {
+  const linksBySource = new Map<string, string[]>();
+  for (const edge of edges) {
+    const existing = linksBySource.get(edge.source) ?? [];
+    existing.push(edge.target);
+    linksBySource.set(edge.source, existing);
+  }
+  return linksBySource;
+}
+
+function structureNoteMarkdown(
+  node: Cluster | Group | Entry,
+  relatedIds: string[],
+): { id: string; content: string } {
   const fm: Record<string, unknown> = {
     id: node.id,
     chapter: node.chapter,
-    level,
+    title: node.title,
+    brief: node.brief,
     sourceRefs: node.sourceRefs,
   };
 
-  if ("kind" in node) fm.kind = node.kind;
-  if ("modelTier" in node) fm.modelTier = node.modelTier;
-  if ("subtopicIds" in node) fm.children = node.subtopicIds;
-  if ("conceptIds" in node) fm.children = node.conceptIds;
-
-  return `---\n${yamlBlock(fm)}---\n\n# ${node.title}\n\n${
-    "summary" in node ? (node.summary as string) : (node as Record<string, unknown>).brief ?? ""
-  }\n`;
-}
-
-function detailNoteMarkdown(
-  d: { conceptId: string; fullDefinition: string; sourceRefs: string[] } & Record<string, unknown>,
-): string {
-  const fm = {
-    id: d.conceptId,
-    sourceRefs: d.sourceRefs,
-  };
-  let body = `# ${d.conceptId}\n\n## Definition\n${d.fullDefinition}\n`;
-  if (Array.isArray(d.workedExamples) && d.workedExamples.length) {
-    body += `\n## Worked Examples\n${d.workedExamples.map((e: string) => `- ${e}`).join("\n")}\n`;
+  if ("groupIds" in node) {
+    fm.type = "cluster";
+  } else if ("entryIds" in node) {
+    fm.type = "group";
+    fm.cluster = node.clusterId;
+  } else {
+    fm.type = "entry";
+    fm.group = node.groupId;
+    fm.kind = node.kind;
   }
-  return `---\n${yamlBlock(fm)}---\n\n${body}`;
+
+  const sections = [`# ${node.title}`, "", node.brief];
+  if (relatedIds.length > 0) {
+    sections.push("", "## Links", "", ...relatedIds.map((id) => `[[${id}]]`));
+  }
+
+  return {
+    id: node.id,
+    content: `---\n${yamlBlock(fm)}---\n\n${sections.join("\n")}\n`,
+  };
 }
 
-function canonMarkdown(
-  canon: { setting: string; protagonist: string; premise: string; tone: { primary: string; genre: string } },
-): string {
-  return `---\ntype: canon\n---\n\n# Setting\n${canon.setting}\n\n# Protagonist\n${canon.protagonist}\n\n# Premise\n${canon.premise}\n\n# Tone\n${canon.tone.primary} / ${canon.tone.genre}\n`;
-}
+function wrapNoteMarkdown(wrap: Wrap): string {
+  const derivativesSection =
+    wrap.derivatives.length > 0
+      ? "\n# Derivatives\n\n" +
+        wrap.derivatives
+          .map((derivative) => `## ${derivative.sourceRef}\n> "${derivative.quote}"`)
+          .join("\n\n")
+      : "";
 
-function arcMarkdown(
-  arc: { chapter: string; arcSummary: string; chapterHook: string },
-): string {
-  return `---\nchapter: ${arc.chapter}\n---\n\n# Arc Summary\n${arc.arcSummary}\n\n# Hook\n${arc.chapterHook}\n`;
+  const fm: Record<string, unknown> = {
+    nodeId: wrap.nodeId,
+    level: wrap.level,
+    headline: wrap.headline,
+    summary: wrap.summary,
+    mood: wrap.mood,
+    color: wrap.color,
+    stats: wrap.stats,
+    highlights: wrap.highlights,
+    sourceRefs: wrap.sourceRefs,
+  };
+
+  let body = `# ${wrap.headline}\n\n${wrap.summary}`;
+
+  if (wrap.level === "cluster") {
+    fm.dateRange = wrap.dateRange;
+    fm.topEntries = wrap.topEntries;
+    fm.themes = wrap.themes;
+  } else if (wrap.level === "group") {
+    fm.theme = wrap.theme;
+  } else {
+    fm.keyFacts = wrap.keyFacts;
+    fm.connections = wrap.connections;
+    body = `# ${wrap.headline}\n\n${wrap.body}`;
+  }
+
+  return `---\n${yamlBlock(fm)}---\n\n${body}${derivativesSection}\n`;
 }
 
 function yamlBlock(obj: Record<string, unknown>): string {

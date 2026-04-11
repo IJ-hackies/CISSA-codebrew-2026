@@ -60,13 +60,11 @@ export interface RendererPublicAPI {
   zoomIn(): Promise<void>
 
   /**
-   * Hand off the rocket from the DOM to the renderer at the given
-   * canvas-relative position, then launch it into the void. Returns a
-   * promise that resolves once the launch animation completes (rocket
-   * has reached cruise altitude). Cruise loop continues indefinitely
-   * until landRocket() is called.
+   * Launch the rocket into the void. Returns a promise that resolves once
+   * the launch animation completes (rocket has reached cruise altitude).
+   * Cruise loop continues indefinitely until landRocket() is called.
    */
-  launchRocket(originCanvasPx: { x: number; y: number }): Promise<void>
+  launchRocket(): Promise<void>
 
   /**
    * Signal "Stage 1 complete" — the rocket descends to its destination
