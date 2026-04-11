@@ -8,7 +8,10 @@
     v-if="!open"
     class="story-trigger"
     :class="{ 'has-resume': !!activeStory }"
-    :style="activeStory ? { '--resume-accent': storyColorFor(activeStory.id) } : undefined"
+    :style="{
+      top: `${props.triggerTop ?? 22}px`,
+      ...(activeStory ? { '--resume-accent': storyColorFor(activeStory.id) } : {}),
+    }"
     :aria-label="activeStory ? `Resume ${activeStory.title}` : 'Stories'"
     @click="handleTriggerClick"
   >
@@ -166,6 +169,7 @@ const props = defineProps<{
   stories: MeshStory[]
   galaxyData: GalaxyData | null
   canGoBack?: boolean
+  triggerTop?: number  // px offset from top for the trigger button (default 22)
 }>()
 
 const emit = defineEmits<{
@@ -327,9 +331,6 @@ function setScene(index: number) {
   currentSceneIndex.value = index
   scrollToSection(index)
   emitHighlights()
-  if (activeStory.value && index > 0 && index < totalSections.value - 1) {
-    emit('visit-planet', activeStory.value.scenes[index - 1].planetId)
-  }
 }
 function nextScene() { if (currentSceneIndex.value < totalSections.value - 1) setScene(currentSceneIndex.value + 1) }
 function prevScene() { if (currentSceneIndex.value > 0) setScene(currentSceneIndex.value - 1) }
@@ -433,32 +434,31 @@ function onProseClick(e: MouseEvent) {
 /* ── Trigger button (closed state) ──────────────────────────────────────── */
 .story-trigger {
   position: fixed;
-  top: 22px;
+  /* top is driven by :style binding (triggerTop prop, default 22px) */
   left: 22px;
-  height: 40px;
-  padding: 0 14px 0 11px;
-  border-radius: 12px;
-  background: rgba(8, 10, 20, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: rgba(255, 255, 255, 0.65);
+  height: 36px;
+  padding: 0 13px;
+  border-radius: 10px;
+  background: rgba(7, 10, 22, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: rgba(255, 255, 255, 0.48);
   display: flex;
   align-items: center;
   gap: 8px;
   cursor: pointer;
   z-index: 55;
-  backdrop-filter: blur(14px);
-  transition: background 0.18s, border-color 0.18s, color 0.18s;
+  backdrop-filter: blur(18px);
+  transition: background 0.16s, color 0.16s;
 }
 .story-trigger:hover {
-  background: rgba(20, 25, 45, 0.92);
-  border-color: rgba(255, 255, 255, 0.26);
-  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.9);
 }
 .trigger-label {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 0.7rem;
+  font-weight: 500;
   letter-spacing: 0.01em;
-  color: rgba(255, 255, 255, 0.8);
+  color: inherit;
 }
 
 /* Resume affordance: colored left edge in the active story's hue. Keeps the

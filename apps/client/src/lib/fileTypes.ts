@@ -22,7 +22,7 @@ export type AcceptedExtension = (typeof ACCEPTED_EXTENSIONS)[number]
 /** For the file picker `accept` attribute. */
 export const ACCEPT_ATTR = ACCEPTED_EXTENSIONS.join(',')
 
-export const TOTAL_SIZE_LIMIT_BYTES = 100 * 1024 * 1024 // 100 MB
+export const TOTAL_SIZE_LIMIT_BYTES = 10 * 1024 * 1024 // 10 MB
 
 export function hasAcceptedExtension(filename: string): boolean {
   const lower = filename.toLowerCase()

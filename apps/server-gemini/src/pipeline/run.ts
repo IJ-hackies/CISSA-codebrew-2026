@@ -38,13 +38,40 @@ import { createLimiter, type Limiter } from "../lib/concurrency";
 import {
   listSourceRows,
   updateGalaxyStatus,
+  updateGalaxyTitle,
   cacheGalaxyData,
   getGalaxyRow,
   type SourceRow,
 } from "../db/client";
+import { generateText, MODEL_FLASH } from "./gemini";
 import { parseWorkspace } from "../workspace/parse";
 import { galaxyPaths } from "../workspace/layout";
 import type { JobStatus } from "../types";
+
+async function generateGalaxyTitle(ctx: PipelineContext): Promise<void> {
+  const systemSummaries = ctx.solarSystems
+    .map((ss) => `- ${ss.title}: ${ss.oneLineDescription}`)
+    .join("\n");
+  if (!systemSummaries) return;
+
+  try {
+    const raw = await generateText({
+      model: MODEL_FLASH,
+      systemInstruction:
+        "You generate ultra-concise titles. Respond with exactly 1–2 words. No punctuation, no explanation.",
+      parts: [{ text: `Given these topic clusters from a knowledge galaxy, produce a 1–2 word title that captures the overall subject:\n${systemSummaries}` }],
+      maxOutputTokens: 20,
+    });
+    const title = raw.trim().replace(/[^a-zA-Z0-9 '\-]/g, "").trim();
+    if (title) {
+      updateGalaxyTitle(ctx.galaxyId, title);
+      console.log(`[pipeline:${ctx.galaxyId}] title="${title}"`);
+    }
+  } catch (err) {
+    // Non-fatal — dashboard falls back to the user-supplied title
+    console.warn(`[pipeline:${ctx.galaxyId}] title generation skipped:`, err);
+  }
+}
 
 function setStage(galaxyId: string, status: JobStatus, detail = ""): void {
   updateGalaxyStatus(galaxyId, status, detail);
@@ -106,6 +133,7 @@ export async function runPipeline(galaxyId: string): Promise<void> {
       try {
         await runOneShotPipeline(ctx, sourceRows, oneShotBudget);
         persist(galaxyId);
+        await generateGalaxyTitle(ctx);
         setStage(galaxyId, "complete");
         return;
       } catch (err) {
@@ -124,6 +152,7 @@ export async function runPipeline(galaxyId: string): Promise<void> {
     }
 
     await runStagedPipeline(ctx, sourceRows, proLimiter);
+    await generateGalaxyTitle(ctx);
     setStage(galaxyId, "complete");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -1,5 +1,5 @@
 /**
- * Thin fetch wrapper for the Scholar System backend API.
+ * Thin fetch wrapper for the Stella Taco backend API.
  *
  * Uses relative URLs — the Vite dev server proxies `/api/*` to the Bun
  * backend (see vite.config.ts). In production the frontend is served by

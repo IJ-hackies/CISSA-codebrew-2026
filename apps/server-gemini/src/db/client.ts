@@ -39,6 +39,15 @@ export function db(): Database {
       created_at  INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS sources_galaxy_idx ON sources(galaxy_id);
+
+    CREATE TABLE IF NOT EXISTS submissions (
+      id          TEXT PRIMARY KEY,
+      galaxy_id   TEXT NOT NULL REFERENCES galaxies(id) ON DELETE CASCADE,
+      text        TEXT,
+      filenames   TEXT NOT NULL DEFAULT '[]',
+      created_at  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS submissions_galaxy_idx ON submissions(galaxy_id);
   `);
   return _db;
 }
@@ -93,6 +102,10 @@ export function getGalaxyRow(id: string): GalaxyRow | null {
   };
 }
 
+export function deleteGalaxyRow(id: string): void {
+  db().prepare(`DELETE FROM galaxies WHERE id = ?`).run(id);
+}
+
 export function listGalaxies(): GalaxyRow[] {
   const rows = db()
     .prepare(
@@ -132,6 +145,12 @@ export function updateGalaxyStatus(
        WHERE id = ?`,
     )
     .run(status, stageDetail, error, Date.now(), id);
+}
+
+export function updateGalaxyTitle(id: string, title: string): void {
+  db()
+    .prepare(`UPDATE galaxies SET title = ?, updated_at = ? WHERE id = ?`)
+    .run(title, Date.now(), id);
 }
 
 export function cacheGalaxyData(id: string, data: GalaxyData): void {
@@ -181,6 +200,47 @@ export function insertSourceRow(row: SourceRow): void {
       row.byteSize,
       row.createdAt,
     );
+}
+
+// ── Submission rows ────────────────────────────────────────────────
+
+export interface SubmissionRow {
+  id: string;
+  galaxyId: string;
+  text: string | null;
+  filenames: string[]; // stored as JSON
+  createdAt: number;
+}
+
+export function insertSubmission(row: SubmissionRow): void {
+  db()
+    .prepare(
+      `INSERT INTO submissions (id, galaxy_id, text, filenames, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(row.id, row.galaxyId, row.text ?? null, JSON.stringify(row.filenames), row.createdAt);
+}
+
+export function listSubmissions(galaxyId: string): SubmissionRow[] {
+  const rows = db()
+    .prepare(
+      `SELECT id, galaxy_id, text, filenames, created_at
+       FROM submissions WHERE galaxy_id = ? ORDER BY created_at ASC`,
+    )
+    .all(galaxyId) as Array<{
+    id: string;
+    galaxy_id: string;
+    text: string | null;
+    filenames: string;
+    created_at: number;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    galaxyId: r.galaxy_id,
+    text: r.text,
+    filenames: (() => { try { return JSON.parse(r.filenames) as string[]; } catch { return []; } })(),
+    createdAt: r.created_at,
+  }));
 }
 
 export function listSourceRows(galaxyId: string): SourceRow[] {

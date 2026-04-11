@@ -20,14 +20,19 @@ import {
   createGalaxyRow,
   getGalaxyRow,
   insertSourceRow,
+  insertSubmission,
+  listSubmissions,
   loadCachedGalaxyData,
+  updateGalaxyStatus,
+  deleteGalaxyRow,
   listGalaxies,
   type SourceRow,
 } from "../db/client";
 import { runPipeline } from "../pipeline/run";
+import { runAppendPipeline } from "../pipeline/append";
 import { emptyGalaxy, type GalaxyData } from "../types";
 
-const MAX_TOTAL_BYTES = 100 * 1024 * 1024; // 100 MB cumulative
+const MAX_TOTAL_BYTES = 10 * 1024 * 1024; // 10 MB cumulative
 
 export const galaxyRoutes = new Hono();
 
@@ -77,6 +82,7 @@ function sanitizeUploadName(name: string): string {
 interface ResolvedInput {
   title: string;
   files: Array<{ buf: Buffer; name: string; mimeType: string }>;
+  rawText?: string; // pasted text (for submission log)
 }
 
 async function resolveCreateInput(c: Context): Promise<ResolvedInput> {
@@ -121,7 +127,7 @@ async function resolveCreateInput(c: Context): Promise<ResolvedInput> {
     }
 
     const title = titleField || files[0]?.name.replace(/\.[^.]+$/, "") || "Untitled";
-    return { title, files };
+    return { title, files, rawText: textField || undefined };
   }
 
   // JSON (pure paste)
@@ -136,6 +142,7 @@ async function resolveCreateInput(c: Context): Promise<ResolvedInput> {
 
   return {
     title: (body.title ?? body.filename ?? "Untitled").trim() || "Untitled",
+    rawText: text,
     files: [
       {
         buf: Buffer.from(text, "utf8"),
@@ -180,6 +187,15 @@ galaxyRoutes.post("/create", async (c) => {
     };
     insertSourceRow(row);
   }
+
+  // Record the submission for the chat log.
+  insertSubmission({
+    id: randomUUID(),
+    galaxyId,
+    text: resolved.rawText ?? null,
+    filenames: resolved.files.filter((f) => f.name !== "pasted.txt").map((f) => f.name),
+    createdAt: now,
+  });
 
   // Kick off the pipeline in the background. The route returns immediately.
   runPipeline(galaxyId).catch((err) => {
@@ -253,6 +269,90 @@ galaxyRoutes.get("/:id/media/:filename", async (c) => {
     }
   }
   return c.json({ error: "media not found", id, filename }, 404);
+});
+
+// ── POST /api/galaxy/:id/append ────────────────────────────────────
+// Add new content to an existing galaxy. Same input shape as /create.
+// Returns an envelope immediately; the append pipeline runs in background.
+
+galaxyRoutes.post("/:id/append", async (c) => {
+  const id = c.req.param("id");
+  const row = getGalaxyRow(id);
+  if (!row) return c.json({ error: "galaxy not found", id }, 404);
+  if (row.status !== "complete" && row.status !== "error") {
+    return c.json({ error: "galaxy is still processing", status: row.status }, 409);
+  }
+
+  let resolved: ResolvedInput;
+  try {
+    resolved = await resolveCreateInput(c);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return c.json({ error: "invalid request", message }, 400);
+  }
+
+  const paths = ensureGalaxyDirs(id);
+  const now = Date.now();
+  for (const f of resolved.files) {
+    const safeName = sanitizeUploadName(f.name);
+    const destAbsolute = join(paths.mediaSources, safeName);
+    writeFileSync(destAbsolute, f.buf);
+
+    insertSourceRow({
+      id: randomUUID(),
+      galaxyId: id,
+      filename: f.name,
+      mediaPath: safeName,
+      mimeType: f.mimeType,
+      byteSize: f.buf.byteLength,
+      createdAt: now,
+    });
+  }
+
+  insertSubmission({
+    id: randomUUID(),
+    galaxyId: id,
+    text: resolved.rawText ?? null,
+    filenames: resolved.files.filter((f) => f.name !== "pasted.txt").map((f) => f.name),
+    createdAt: now,
+  });
+
+  // Mark as queued and run the append pipeline in background.
+  updateGalaxyStatus(id, "queued", "appending new content");
+
+  runAppendPipeline(id).catch((err) => {
+    console.error(`[routes/append] pipeline crashed for ${id}:`, err);
+  });
+
+  const updatedRow = getGalaxyRow(id)!;
+  const galaxy = loadCachedGalaxyData(id) ?? emptyGalaxy();
+
+  return c.json({
+    id: updatedRow.id,
+    title: updatedRow.title,
+    status: updatedRow.status,
+    stageDetail: updatedRow.stageDetail,
+    galaxy,
+  }, 202);
+});
+
+// ── GET /api/galaxy/:id/submissions ────────────────────────────────
+
+galaxyRoutes.get("/:id/submissions", (c) => {
+  const id = c.req.param("id");
+  const row = getGalaxyRow(id);
+  if (!row) return c.json({ error: "galaxy not found", id }, 404);
+  return c.json({ submissions: listSubmissions(id) });
+});
+
+// ── DELETE /api/galaxy/:id ─────────────────────────────────────────
+
+galaxyRoutes.delete("/:id", (c) => {
+  const id = c.req.param("id");
+  const row = getGalaxyRow(id);
+  if (!row) return c.json({ error: "galaxy not found", id }, 404);
+  deleteGalaxyRow(id);
+  return c.json({ ok: true, id });
 });
 
 // ── GET /api/galaxy (list) ─────────────────────────────────────────

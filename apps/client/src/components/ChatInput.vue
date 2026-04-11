@@ -312,7 +312,7 @@ defineExpose({
 
     <div class="meta-row" v-if="files.length || error">
       <span v-if="files.length" class="counter" :class="{ over: overLimit }">
-        {{ formatBytes(totalBytes) }} / 100 MB
+        {{ formatBytes(totalBytes) }} / 10 MB
       </span>
       <span v-if="error" class="error">{{ error }}</span>
     </div>

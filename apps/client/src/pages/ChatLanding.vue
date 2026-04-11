@@ -4,16 +4,12 @@ import { useRouter } from 'vue-router'
 import GalaxyRenderer from '@/components/GalaxyRenderer.vue'
 import ChatInput from '@/components/ChatInput.vue'
 import DropOverlay from '@/components/DropOverlay.vue'
-import HistoryButton from '@/components/HistoryButton.vue'
-import HistoryOverlay from '@/components/HistoryOverlay.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { useVisualViewport } from '@/composables/useVisualViewport'
 import {
   addRecentGalaxy,
-  listRecentGalaxies,
-  type GalaxyEntry,
 } from '@/lib/recentGalaxies'
-import { createGalaxy, fetchGalaxyEnvelope } from '@/lib/meshApi'
+import { createGalaxy, fetchGalaxyEnvelope, type GalaxyJobStatus } from '@/lib/meshApi'
 
 const router = useRouter()
 const isMobile = useIsMobile()
@@ -25,12 +21,91 @@ const launching = ref(false)
 const transitioning = ref(false)  // true during the fade-to-black before route switch
 const launchError = ref<string | null>(null)
 const dropVisible = ref(false)
-const recents = ref<GalaxyEntry[]>(listRecentGalaxies())
-const historyOpen = ref(false)
 
 const galaxyRendererRef = ref<InstanceType<typeof GalaxyRenderer> | null>(null)
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const inputRect = ref<DOMRect | null>(null)
+
+// ─── Launch status text ───────────────────────────────────────────────────────
+const statusMessage = ref('Preparing your galaxy')
+const statusFading = ref(false)
+
+const STAGE_MESSAGES: Record<GalaxyJobStatus, string[]> = {
+  queued: [
+    'Preparing your galaxy',
+    'Warming up the engines',
+    'Getting ready for launch',
+  ],
+  ingest: [
+    'Parsing sources',
+    'Reading your content',
+    'Extracting key ideas',
+    'Processing your files',
+  ],
+  cluster: [
+    'Discovering themes',
+    'Finding connections',
+    'Grouping related ideas',
+    'Mapping the knowledge',
+  ],
+  outline: [
+    'Building solar systems',
+    'Organising the structure',
+    'Placing the planets',
+    'Shaping your galaxy',
+  ],
+  expand: [
+    'Expanding knowledge',
+    'Writing planet details',
+    'Adding depth to each world',
+    'Filling in the universe',
+  ],
+  stories: [
+    'Writing stories',
+    'Crafting your characters',
+    'Plotting the journeys',
+    'Weaving the narrative',
+    'Sending explorers into the void',
+  ],
+  complete: ['Your galaxy is ready'],
+  error:    ['Something went wrong'],
+}
+
+let _cycleMessages: string[] = []
+let _cycleIndex   = 0
+let _cycleTimer: number | null = null
+
+function _scheduleNextMessage() {
+  if (_cycleMessages.length <= 1) return
+  // Each message lingers for a different amount — feels organic, not mechanical
+  const delay = 3000 + Math.random() * 2400
+  _cycleTimer = window.setTimeout(() => {
+    // Fade out → swap text → fade back in
+    statusFading.value = true
+    window.setTimeout(() => {
+      _cycleIndex = (_cycleIndex + 1) % _cycleMessages.length
+      statusMessage.value = _cycleMessages[_cycleIndex]
+      statusFading.value = false
+      _scheduleNextMessage()
+    }, 220)
+  }, delay)
+}
+
+function startStatusCycle(stage: GalaxyJobStatus) {
+  if (_cycleTimer !== null) { clearTimeout(_cycleTimer); _cycleTimer = null }
+  _cycleMessages = STAGE_MESSAGES[stage] ?? [stage]
+  _cycleIndex    = 0
+  statusFading.value = true
+  window.setTimeout(() => {
+    statusMessage.value = _cycleMessages[0]
+    statusFading.value = false
+    _scheduleNextMessage()
+  }, 220)
+}
+
+function stopStatusCycle() {
+  if (_cycleTimer !== null) { clearTimeout(_cycleTimer); _cycleTimer = null }
+}
 
 // ─── Drag-and-drop, page-wide ─────────────────────────────────────────────
 let dragCounter = 0
@@ -129,31 +204,9 @@ onBeforeUnmount(() => {
   if (focusInterval !== null) clearInterval(focusInterval)
   inputResizeObserver?.disconnect()
   inputResizeObserver = null
+  stopStatusCycle()
 })
 
-function openHistory() {
-  if (!recents.value.length) return
-  historyOpen.value = true
-  const renderer = galaxyRendererRef.value?.getRenderer()
-  if (!renderer) return
-  if (isMobile.value) {
-    // Mobile: brief warp + input fades (the fade is driven by .dimmed class).
-    renderer.warp()
-  } else {
-    // Desktop: sustained camera pull-back. Input shrinks + fades via CSS.
-    renderer.zoomOut()
-  }
-}
-function closeHistory() {
-  historyOpen.value = false
-  const renderer = galaxyRendererRef.value?.getRenderer()
-  if (!renderer) return
-  if (isMobile.value) {
-    renderer.warp()
-  } else {
-    renderer.zoomIn()
-  }
-}
 
 const placeholderTitle = computed(() => {
   const trimmed = text.value.trim()
@@ -169,9 +222,16 @@ const placeholderTitle = computed(() => {
 const MIN_CRUISE_MS = 2500
 const POLL_INTERVAL_MS = 2500
 
+let _lastPolledStage: GalaxyJobStatus | null = null
+
 async function waitForRenderableGalaxy(id: string) {
   for (;;) {
     const envelope = await fetchGalaxyEnvelope(id)
+    // Only restart the cycle when the stage actually changes
+    if (envelope.status !== _lastPolledStage) {
+      _lastPolledStage = envelope.status
+      startStatusCycle(envelope.status)
+    }
     if (envelope.status === 'error') {
       throw new Error(envelope.error ?? 'Galaxy generation failed')
     }
@@ -198,6 +258,8 @@ async function handleSubmit() {
 
   launching.value = true
   launchError.value = null
+  _lastPolledStage = null
+  startStatusCycle('queued')
 
   const renderer = galaxyRendererRef.value?.getRenderer()
 
@@ -230,6 +292,7 @@ async function handleSubmit() {
       await renderer.landRocket()
     }
 
+    stopStatusCycle()
     // Fade to black before the route switch so there's no hard cut.
     transitioning.value = true
     await new Promise((r) => setTimeout(r, 450))
@@ -243,7 +306,6 @@ async function handleSubmit() {
       throw new Error('Backend returned galaxy without id')
     }
     addRecentGalaxy(entry)
-    recents.value = listRecentGalaxies()
     const navResult = router.push(`/galaxy/${entry.uuid}`)
     navResult
       .then((failure) => {
@@ -253,6 +315,7 @@ async function handleSubmit() {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error('[chat-landing] launch failed:', message)
+    stopStatusCycle()
     launchError.value = `Launch failed: ${message}`
     // Reset the renderer so the void doesn't stay stuck in tunnel mode.
     renderer?.abortLaunch()
@@ -266,6 +329,11 @@ async function handleSubmit() {
     <GalaxyRenderer ref="galaxyRendererRef" />
     <!-- Fade-to-black veil that fires after rocket lands, before route switch -->
     <div class="transition-veil" :class="{ active: transitioning }" />
+
+    <!-- Launch status pill — visible during rocket cruise -->
+    <div class="launch-status" :class="{ visible: launching && !transitioning }">
+      <span class="launch-status-text" :class="{ fading: statusFading }">{{ statusMessage }}</span><span class="launch-status-dots" aria-hidden="true">...</span>
+    </div>
 
     <!-- Nebula blobs -->
     <div class="nebula nebula-1" />
@@ -285,26 +353,20 @@ async function handleSubmit() {
     <div class="vignette" />
 
     <!-- Logo + wordmark (top-left desktop, top-right mobile) -->
-    <a href="/" class="logo-link" aria-label="Scholar System">
-      <img src="/logo.png" alt="Scholar System" class="logo" />
-      <span class="wordmark">SCHOLAR&nbsp;SYSTEM</span>
+    <a href="/" class="logo-link" aria-label="Stella Taco">
+      <img src="/logo.png" alt="Stella Taco" class="logo" />
+      <span class="wordmark">STELLA&nbsp;TACO</span>
     </a>
-
-    <!-- Unified history button (top-right desktop, top-left mobile) -->
-    <HistoryButton
-      :visible="recents.length > 0 && !launching"
-      @open="openHistory"
-    />
 
     <!-- ─── Desktop layout: centered stage ──────────────────────────── -->
     <div
       v-if="!isMobile"
       class="stage"
-      :class="{ launching, 'history-open': historyOpen }"
+      :class="{ launching }"
     >
       <div class="hero">
         <h1 class="tagline">
-          Upload your memories.<br />Every one gets <strong>wrapped</strong>.<br />Explore it as a <strong>galaxy</strong>.
+          Upload your memories.<br />Explore it as a <strong>galaxy</strong>.
         </h1>
         <p class="sub-tagline">Journals, notes, PDFs, photos — drop anything.</p>
       </div>
@@ -327,7 +389,7 @@ async function handleSubmit() {
     </div>
 
     <!-- Format indicator -->
-    <div v-if="!isMobile" class="formats-footer" :class="{ hidden: launching || historyOpen }">
+    <div v-if="!isMobile" class="formats-footer" :class="{ hidden: launching }">
       <div class="format-icons">
         <span class="fmt-chip">PDF</span>
         <span class="fmt-chip">DOCX</span>
@@ -341,7 +403,7 @@ async function handleSubmit() {
 
     <!-- ─── Mobile layout: chips floating above, input pinned bottom ── -->
     <template v-if="isMobile">
-      <div class="mobile-input-dock" :class="{ launching, dimmed: historyOpen }">
+      <div class="mobile-input-dock" :class="{ launching }">
         <ChatInput
           ref="chatInputRef"
           v-model="text"
@@ -352,13 +414,6 @@ async function handleSubmit() {
         />
       </div>
     </template>
-
-    <!-- Unified history overlay -->
-    <HistoryOverlay
-      :visible="historyOpen"
-      :entries="recents"
-      @close="closeHistory"
-    />
 
     <DropOverlay :visible="dropVisible" />
   </main>
@@ -683,15 +738,6 @@ async function handleSubmit() {
     opacity 900ms ease-in,
     filter 900ms ease-in;
 }
-.stage.history-open {
-  /* Camera-pulled-back: input shrinks and fades behind the overlay. */
-  transform: scale(0.86);
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    transform 700ms cubic-bezier(0.2, 0.7, 0.2, 1),
-    opacity 520ms ease;
-}
 
 /* ── Mobile layout (≤768px) ─────────────────────────────────────────── */
 .page.mobile .logo-link {
@@ -738,10 +784,6 @@ async function handleSubmit() {
     transform 1100ms cubic-bezier(0.5, 0, 0.75, 0),
     filter 900ms ease-in;
 }
-.mobile-input-dock.dimmed {
-  opacity: 0;
-  pointer-events: none;
-}
 
 .mobile-chips-floating {
   position: fixed;
@@ -763,5 +805,62 @@ async function handleSubmit() {
   .stage {
     display: none;
   }
+}
+
+/* ── Launch status pill ─────────────────────────────────────────────────── */
+.launch-status {
+  position: fixed;
+  /* Sits below the orbit ring (~30% above screen bottom feels natural) */
+  bottom: 28%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 22;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  pointer-events: none;
+
+  padding: 9px 22px 9px 22px;
+  border-radius: 999px;
+  background: rgba(4, 4, 15, 0.55);
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: rgba(210, 220, 255, 0.75);
+  white-space: nowrap;
+
+  opacity: 0;
+  transition: opacity 600ms ease;
+}
+.launch-status.visible {
+  opacity: 1;
+}
+
+/* Text fades on message swap */
+.launch-status-text {
+  transition: opacity 200ms ease;
+}
+.launch-status-text.fading {
+  opacity: 0;
+}
+
+/* Animated ellipsis — cycles "." → ".." → "..." → "." with no backward sweep */
+.launch-status-dots {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: bottom;
+  width: 0.35em; /* always at least one dot visible */
+  animation: launch-dots 1.5s linear infinite;
+}
+@keyframes launch-dots {
+  0%      { width: 0.35em;  animation-timing-function: step-end; }
+  33.33%  { width: 0.7em;   animation-timing-function: step-end; }
+  66.66%  { width: 1.05em;  animation-timing-function: step-end; }
+  100%    { width: 0.35em; }
 }
 </style>

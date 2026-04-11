@@ -122,3 +122,83 @@ export async function fetchMeshData(id: string): Promise<GalaxyData> {
 export function loadMeshFromJson(json: unknown): GalaxyData {
   return json as GalaxyData
 }
+
+// ── Galaxy list ────────────────────────────────────────────────────
+
+export interface GalaxyRowSummary {
+  id: string
+  title: string
+  status: GalaxyJobStatus
+  stageDetail: string
+  error: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+export async function deleteGalaxy(id: string): Promise<void> {
+  const res = await fetch(`/api/galaxy/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`
+    try {
+      const err = (await res.json()) as { error?: string; message?: string }
+      detail = err.message ?? err.error ?? detail
+    } catch { /* non-JSON */ }
+    throw new Error(detail)
+  }
+}
+
+export async function fetchGalaxyList(): Promise<GalaxyRowSummary[]> {
+  const res = await fetch('/api/galaxy')
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const body = (await res.json()) as { galaxies: GalaxyRowSummary[] }
+  return body.galaxies
+}
+
+// ── Append ─────────────────────────────────────────────────────────
+
+export async function appendGalaxy(id: string, input: CreateGalaxyInput): Promise<GalaxyEnvelope> {
+  const hasFiles = (input.files?.length ?? 0) > 0
+  let res: Response
+
+  if (hasFiles) {
+    const form = new FormData()
+    for (const f of input.files!) form.append('file', f, f.name)
+    if (input.title) form.append('title', input.title)
+    if (input.text) form.append('text', input.text)
+    res = await fetch(`/api/galaxy/${encodeURIComponent(id)}/append`, { method: 'POST', body: form })
+  } else {
+    res = await fetch(`/api/galaxy/${encodeURIComponent(id)}/append`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: input.text, title: input.title, filename: input.filename }),
+    })
+  }
+
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`
+    try {
+      const err = (await res.json()) as { error?: string; message?: string }
+      detail = err.message ?? err.error ?? detail
+    } catch { /* non-JSON */ }
+    throw new Error(detail)
+  }
+
+  return (await res.json()) as GalaxyEnvelope
+}
+
+// ── Submissions ────────────────────────────────────────────────────
+
+export interface Submission {
+  id: string
+  galaxyId: string
+  text: string | null
+  filenames: string[]
+  createdAt: number
+}
+
+export async function fetchSubmissions(galaxyId: string): Promise<Submission[]> {
+  const res = await fetch(`/api/galaxy/${encodeURIComponent(galaxyId)}/submissions`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const body = (await res.json()) as { submissions: Submission[] }
+  return body.submissions
+}

@@ -238,7 +238,16 @@ export function useMeshStore() {
     if (existing && (availablePresets as readonly string[]).includes(existing)) {
       return existing as T
     }
-    const choice = availablePresets[Math.floor(Math.random() * availablePresets.length)]
+    // Prefer presets not already assigned to another system — only duplicate
+    // when every preset is already in use (more systems than presets).
+    const usedByOthers = new Set(
+      Object.entries(systemPresets.value)
+        .filter(([id]) => id !== systemId)
+        .map(([, preset]) => preset),
+    )
+    const unused = availablePresets.filter((p) => !usedByOthers.has(p))
+    const pool = unused.length > 0 ? unused : availablePresets
+    const choice = pool[Math.floor(Math.random() * pool.length)]
     const next = { ...systemPresets.value, [systemId]: choice }
     systemPresets.value = next
     persistPresetMap(presetsKey(galaxyId.value), next)

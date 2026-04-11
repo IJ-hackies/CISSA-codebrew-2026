@@ -21,24 +21,26 @@
       </div>
     </Transition>
 
-    <!-- HTML label overlays (solar system names) -->
+    <!-- HTML label overlays (solar system names).
+         Position/opacity/fontSize are written directly to the DOM in onFrame()
+         to avoid Vue's 1-frame async lag during camera drag. -->
     <div
-      v-for="lbl in labelPositions"
+      v-for="lbl in staticLabels"
       :key="lbl.id"
       class="node-label"
-      :style="{ left: lbl.x + 'px', top: lbl.y + 'px', opacity: lbl.opacity, '--lc': lbl.color, fontSize: lbl.fontSize + 'px' }"
+      :style="{ '--lc': lbl.color }"
+      :ref="(el) => { if (el) labelElMap.set(lbl.id, el as HTMLElement) }"
     >
       {{ lbl.title }}
       <svg class="sys-progress-ring" viewBox="0 0 14 14" width="14" height="14">
-        <!-- track -->
         <circle cx="7" cy="7" r="5" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="1.5"/>
-        <!-- filled arc -->
         <circle
+          class="ring-arc"
           cx="7" cy="7" r="5" fill="none"
           stroke="#5ba8ff"
           stroke-width="1.5"
           stroke-linecap="round"
-          :stroke-dasharray="`${lbl.progress * 31.42} 31.42`"
+          stroke-dasharray="0 31.42"
           stroke-dashoffset="0"
           transform="rotate(-90 7 7)"
         />
@@ -48,24 +50,97 @@
     <!-- Nav veil -->
     <div class="nav-veil" ref="veilRef" />
 
-    <!-- Onboarding tooltip (first galaxy only) -->
-    <OnboardingTooltip
-      v-if="!loading && meshData && isFirstGalaxy"
-      storage-key="ss.onboard.galaxy"
-      text="Each cluster is a theme from your upload. Click one to enter."
-      position="bottom-center"
-    />
+    <!-- Onboarding tooltips (first galaxy only) -->
+    <template v-if="!loading && meshData && isFirstGalaxy">
+      <OnboardingTooltip
+        storage-key="ss.onboard.galaxy"
+        text="Each cluster is a theme from your upload. Click one to enter."
+        position="bottom-center"
+      />
+      <OnboardingTooltip
+        storage-key="ss.onboard.stories"
+        text="Characters journey through this galaxy — read their stories."
+        position="top-left"
+        :offset="{ top: '104px', left: '22px' }"
+      />
+    </template>
 
-    <!-- Story reader (left rail). Galaxy view has no planet drawer to
-         collapse, so no `@opened` handler is needed here. -->
+    <!-- Desktop nav card: Home + Chat (top-left) -->
+    <nav class="scene-nav-stack" v-if="!loading && meshData">
+      <button class="nav-pill" @click="router.push('/')" aria-label="Dashboard">
+        <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+          <path d="M1.5 7.5L7.5 2l6 5.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M3 6.5V13h3.5v-3.5h2V13H12V6.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="nav-pill-label">Home</span>
+      </button>
+      <button class="nav-pill" @click="router.push(`/galaxy/${route.params.id}/chat`)" aria-label="Chat">
+        <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+          <path d="M2 2h11v9H8l-3 2V11H2V2z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="nav-pill-label">Chat</span>
+      </button>
+    </nav>
+
+    <!-- Mobile hamburger (top-right) -->
+    <div class="nav-hamburger-wrap" v-if="!loading && meshData">
+      <button class="nav-hamburger-btn" @click="menuOpen = !menuOpen" :aria-label="menuOpen ? 'Close menu' : 'Menu'">
+        <svg v-if="!menuOpen" width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <svg v-else width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <Transition name="menu-drop">
+        <nav v-if="menuOpen" class="nav-dropdown">
+          <button class="nav-drop-item" @click="router.push('/'); menuOpen = false">
+            <svg width="14" height="14" viewBox="0 0 15 15" fill="none">
+              <path d="M1.5 7.5L7.5 2l6 5.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M3 6.5V13h3.5v-3.5h2V13H12V6.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Home
+          </button>
+          <button class="nav-drop-item" @click="router.push(`/galaxy/${route.params.id}/chat`); menuOpen = false">
+            <svg width="14" height="14" viewBox="0 0 15 15" fill="none">
+              <path d="M2 2h11v9H8l-3 2V11H2V2z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Chat
+          </button>
+        </nav>
+      </Transition>
+    </div>
+
+    <!-- Story reader. Desktop: offset below nav card. Mobile: top of screen. -->
     <StoryReader
       v-if="meshData"
       ref="storyReaderRef"
       :stories="meshData.stories"
       :galaxy-data="meshData"
+      :trigger-top="isMobile ? 22 : 104"
       @visit-planet="onStoryVisitPlanet"
       @navigate-to-planet="onStoryNavigateToPlanet"
       @open-story="onStoryOpenStory"
+    />
+
+    <!-- Souls HUD (bottom-right) -->
+    <ConceptHUD
+      v-if="!loading && meshData"
+      ref="conceptHudRef"
+      :galaxy-data="meshData"
+      :pill-mode="false"
+      @open="onHudOpenConcept"
+    />
+
+    <!-- Concept drawer -->
+    <ConceptDrawer
+      v-if="meshData && activeConceptId"
+      :concept-id="activeConceptId"
+      :galaxy-data="meshData"
+      :open="conceptDrawerOpen"
+      :collected="isConceptCollected(activeConceptId)"
+      @collect="collectConcept(activeConceptId!)"
+      @close="onConceptDrawerClose"
     />
   </div>
 </template>
@@ -80,14 +155,35 @@ import { forceSimulation, forceManyBody, forceCenter, forceCollide } from 'd3-fo
 import { useThreeScene } from '@/composables/useThreeScene'
 import { useWarpEffect } from '@/composables/useWarpEffect'
 import { useMeshStore } from '@/lib/meshStore'
+import { useIsMobile } from '@/composables/useIsMobile'
 import OnboardingTooltip from '@/components/OnboardingTooltip.vue'
 import StoryReader from '@/components/StoryReader.vue'
+import ConceptHUD from '@/components/ConceptHUD.vue'
+import ConceptDrawer from '@/components/ConceptDrawer.vue'
 import type { UUID } from '@/lib/meshApi'
 
 // ── Store ─────────────────────────────────────────────────────────────────────
 const router = useRouter()
 const route  = useRoute()
-const { data: meshData, galaxyId, visitedPlanetIds, loadFromApi, getOrGenerateSystemPreset } = useMeshStore()
+const isMobile = useIsMobile()
+const { data: meshData, galaxyId, visitedPlanetIds, collectedConceptIds, loadFromApi, getOrGenerateSystemPreset, collectConcept, isConceptCollected } = useMeshStore()
+
+// ── Mobile nav menu ───────────────────────────────────────────────────────────
+const menuOpen = ref(false)
+
+// ── Concept drawer (souls) ────────────────────────────────────────────────────
+const conceptHudRef       = ref<InstanceType<typeof ConceptHUD>>()
+const conceptDrawerOpen   = ref(false)
+const activeConceptId     = ref<UUID | null>(null)
+
+function onHudOpenConcept(conceptId: UUID) {
+  activeConceptId.value = conceptId
+  conceptDrawerOpen.value = true
+}
+function onConceptDrawerClose() {
+  conceptDrawerOpen.value = false
+  activeConceptId.value = null
+}
 
 // ── Onboarding: only show for the user's very first galaxy ────────────────
 const FIRST_GALAXY_KEY = 'ss.firstGalaxyId'
@@ -147,15 +243,23 @@ function onStoryOpenStory(storyId: UUID) {
 }
 
 // ── Computed ──────────────────────────────────────────────────────────────────
-const galaxyTitle      = computed(() => 'Scholar Galaxy')
+const galaxyTitle      = computed(() => 'Stella Taco')
 const solarSystemCount = computed(() => Object.keys(meshData.value?.solarSystems ?? {}).length)
 const planetCount      = computed(() => Object.keys(meshData.value?.planets ?? {}).length)
 const conceptCount     = computed(() => Object.keys(meshData.value?.concepts ?? {}).length)
 
 // ── HTML overlays ─────────────────────────────────────────────────────────────
-interface LabelPos { id: string; x: number; y: number; opacity: number; title: string; color: string; fontSize: number; progress: number }
-const labelPositions = ref<LabelPos[]>([])
+// staticLabels drives v-for (set once at build time — id, title, color only).
+// Per-frame position/opacity/fontSize/progress are written directly to DOM
+// elements via labelElMap, bypassing Vue reactivity to stay in sync with the
+// WebGL canvas and eliminate the 1-frame lag that causes drag wobble.
+interface StaticLabel { id: string; title: string; color: string }
+const staticLabels = ref<StaticLabel[]>([])
+const labelElMap   = new Map<string, HTMLElement>()
+const labelHalfW   = new Map<string, number>()       // cached half-widths (avoid offsetWidth every frame)
+const labelArcMap  = new Map<string, SVGCircleElement>() // cached ring-arc refs
 const labelWorldData: Array<{ id: string; mesh: THREE.Mesh; title: string; color: string }> = []
+const _labelTmp = new THREE.Vector3() // reused every frame — avoid per-frame allocation
 
 // ── Three.js state ─────────────────────────────────────────────────────────────
 let sceneCtx: ReturnType<typeof useThreeScene> | null = null
@@ -170,16 +274,21 @@ let particleTexture: THREE.CanvasTexture | null = null
  * its own light — no bloom needed, no bubble halos around bright pixels.
  */
 function makeParticleTexture(): THREE.CanvasTexture {
-  const size = 64
+  // 128px for sharper mip-map chain; hard solid core so particles stay crisp
+  // at any zoom level — a soft gradient bleeds adjacent particles into a
+  // mushy cloud, especially in the galaxy overview where particles are small.
+  const size = 128
   const c = document.createElement('canvas')
   c.width = c.height = size
   const ctx = c.getContext('2d')!
-  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2)
-  g.addColorStop(0.0, 'rgba(255,255,255,1)')
-  g.addColorStop(0.30, 'rgba(255,255,255,0.85)')
-  g.addColorStop(0.55, 'rgba(255,255,255,0.35)')
-  g.addColorStop(0.85, 'rgba(255,255,255,0.07)')
-  g.addColorStop(1.0, 'rgba(255,255,255,0)')
+  const half = size / 2
+  const g = ctx.createRadialGradient(half, half, 0, half, half, half)
+  g.addColorStop(0.00, 'rgba(255,255,255,1.00)') // solid bright core
+  g.addColorStop(0.28, 'rgba(255,255,255,1.00)') // keep core solid out to 28%
+  g.addColorStop(0.50, 'rgba(255,255,255,0.55)') // fast falloff starts here
+  g.addColorStop(0.70, 'rgba(255,255,255,0.12)')
+  g.addColorStop(0.88, 'rgba(255,255,255,0.02)')
+  g.addColorStop(1.00, 'rgba(255,255,255,0.00)')
   ctx.fillStyle = g
   ctx.fillRect(0, 0, size, size)
   const tex = new THREE.CanvasTexture(c)
@@ -680,15 +789,15 @@ function buildGraph() {
   const simNodes: SimNode[] = systems.map((s) => ({
     id: s.id,
     planetCount: s.planets.length,
-    x: (Math.random() - 0.5) * 30,
-    y: (Math.random() - 0.5) * 15,
-    z: (Math.random() - 0.5) * 30,
+    x: (Math.random() - 0.5) * 14,
+    y: (Math.random() - 0.5) * 7,
+    z: (Math.random() - 0.5) * 14,
   }))
 
   const sim = forceSimulation(simNodes, 3)
-    .force('charge', forceManyBody().strength(-40))
+    .force('charge', forceManyBody().strength(-18))
     .force('center', forceCenter(0, 0, 0))
-    .force('collide', forceCollide(10))
+    .force('collide', forceCollide(7))
     .stop()
   for (let i = 0; i < 200; i++) sim.tick()
 
@@ -754,6 +863,7 @@ function buildGraph() {
     clickableMeshes.push(hitMesh)
 
     labelWorldData.push({ id: n.id, mesh: hitMesh, title: sys.title, color: hex })
+    staticLabels.value.push({ id: n.id, title: sys.title, color: hex })
   })
 
   // Particle-stream edges between systems (faint connections)
@@ -786,7 +896,7 @@ function onFrame(elapsed: number) {
   const cam = sceneCtx.camera
   const w   = containerRef.value.clientWidth
   const h   = containerRef.value.clientHeight
-  const tmp = new THREE.Vector3()
+  const tmp = _labelTmp
 
   // Animate particle formations — static presets rotate, animated presets update per-particle
   clickableMeshes.forEach((hitMesh) => {
@@ -821,26 +931,35 @@ function onFrame(elapsed: number) {
     obj.geometry.attributes.position.needsUpdate = true
   })
 
-  // HTML label projection
-  const updated: LabelPos[] = []
+  // HTML label projection — write directly to DOM to stay in sync with the
+  // WebGL frame. Using a reactive ref would schedule a Vue microtask update,
+  // lagging 1 frame behind the canvas and causing visible drag wobble.
   for (const lbl of labelWorldData) {
+    const el = labelElMap.get(lbl.id)
+    if (!el) continue
     tmp.copy(lbl.mesh.position)
     tmp.project(cam)
-    const sx = (tmp.x * 0.5 + 0.5) * w
-    const sy = (-tmp.y * 0.5 + 0.5) * h
+    const sx   = (tmp.x * 0.5 + 0.5) * w
+    const sy   = (-tmp.y * 0.5 + 0.5) * h
     const dist = cam.position.distanceTo(lbl.mesh.position)
-    // Fully opaque until ~160, fades to 0 at 250
-    const opacity = tmp.z < 1 ? Math.max(0, Math.min(1, (250 - dist) / 90)) : 0
-    const r = (lbl.mesh.geometry as THREE.SphereGeometry).parameters.radius * lbl.mesh.scale.x
-    // Perspective-correct font scale: bigger as camera closes in, min 9px max 20px
+    const opacity  = tmp.z < 1 ? Math.max(0, Math.min(1, (250 - dist) / 90)) : 0
+    const r        = (lbl.mesh.geometry as THREE.SphereGeometry).parameters.radius * lbl.mesh.scale.x
     const fontSize = Math.max(9, Math.min(20, 3.0 * h / dist))
+    // Cache half-width once (offsetWidth triggers layout — don't read every frame)
+    let halfW = labelHalfW.get(lbl.id) ?? 0
+    if (!halfW && el.offsetWidth) { halfW = el.offsetWidth / 2; labelHalfW.set(lbl.id, halfW) }
+    el.style.transform = `translate(${sx - halfW}px, ${sy - r * (h / (dist + 0.01)) - 16}px)`
+    el.style.opacity   = String(opacity)
+    el.style.fontSize  = fontSize + 'px'
     const sys      = meshData.value?.solarSystems[lbl.id]
     const total    = sys?.planets.length ?? 0
     const seen     = total > 0 ? sys!.planets.filter(pid => visitedPlanetIds.value.has(pid)).length : 0
     const progress = total > 0 ? seen / total : 0
-    updated.push({ id: lbl.id, x: sx, y: sy - r * (h / (dist + 0.01)) - 16, opacity, title: lbl.title, color: lbl.color, fontSize, progress })
+    // Cache ring-arc element ref (querySelector every frame is expensive)
+    let arc = labelArcMap.get(lbl.id)
+    if (!arc) { const found = el.querySelector<SVGCircleElement>('.ring-arc'); if (found) { arc = found; labelArcMap.set(lbl.id, arc) } }
+    if (arc) arc.style.strokeDasharray = `${progress * 31.42} 31.42`
   }
-  labelPositions.value = updated
 }
 
 // ── Raycasting ─────────────────────────────────────────────────────────────────
@@ -1042,14 +1161,118 @@ onUnmounted(() => {
   .hud { display: none; }
 }
 
+/* ── Scene nav stack (top-left: Home + Chat grouped card) ─────────── */
+.scene-nav-stack {
+  position: fixed;
+  top: 22px; left: 22px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: rgba(7, 10, 22, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+  backdrop-filter: blur(18px);
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.nav-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 13px;
+  font-family: var(--font-ui, sans-serif);
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: rgba(255,255,255,0.48);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  cursor: pointer;
+  transition: color 0.16s, background 0.16s;
+  white-space: nowrap;
+}
+.nav-pill:last-child { border-bottom: none; }
+.nav-pill:hover {
+  color: rgba(255,255,255,0.9);
+  background: rgba(255,255,255,0.06);
+}
+.nav-pill-label {
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* Desktop only — hide hamburger */
+.nav-hamburger-wrap { display: none; }
+
+@media (max-width: 768px) {
+  /* Hide the desktop card */
+  .scene-nav-stack { display: none; }
+
+  /* Hamburger wrapper: top-right */
+  .nav-hamburger-wrap {
+    display: block;
+    position: fixed;
+    top: 22px; right: 22px;
+    z-index: 30;
+  }
+
+  .nav-hamburger-btn {
+    width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(7, 10, 22, 0.82);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 10px;
+    backdrop-filter: blur(18px);
+    color: rgba(255,255,255,0.7);
+    cursor: pointer;
+    transition: color 0.16s, background 0.16s;
+  }
+  .nav-hamburger-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
+
+  .nav-dropdown {
+    position: absolute;
+    top: calc(100% + 8px); right: 0;
+    display: flex; flex-direction: column;
+    background: rgba(7, 10, 22, 0.92);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+    backdrop-filter: blur(20px);
+    overflow: hidden;
+    min-width: 140px;
+  }
+
+  .nav-drop-item {
+    display: flex; align-items: center; gap: 9px;
+    height: 40px; padding: 0 16px;
+    font-family: var(--font-ui, sans-serif);
+    font-size: 0.78rem; font-weight: 500;
+    color: rgba(255,255,255,0.75);
+    background: transparent; border: none;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    cursor: pointer; text-align: left;
+    transition: color 0.14s, background 0.14s;
+  }
+  .nav-drop-item:last-child { border-bottom: none; }
+  .nav-drop-item:hover { color: #fff; background: rgba(255,255,255,0.07); }
+
+  /* Dropdown animation */
+  .menu-drop-enter-active { transition: opacity 0.15s ease, transform 0.15s ease; }
+  .menu-drop-leave-active { transition: opacity 0.12s ease, transform 0.12s ease; }
+  .menu-drop-enter-from, .menu-drop-leave-to { opacity: 0; transform: translateY(-6px); }
+}
+
 .node-label {
   position: absolute;
+  left: 0; top: 0; /* anchor — onFrame writes the full translate() */
   display: flex; align-items: center; gap: 5px;
   font-size: 15px; /* overridden per-element by inline style */
   font-weight: 600;
   color: rgba(255,255,255,0.88);
   pointer-events: none;
-  transform: translateX(-50%);
+  will-change: transform, opacity; /* promote to GPU layer — eliminates compositor jitter */
   white-space: nowrap;
   text-shadow: 0 1px 12px rgba(0,0,0,1), 0 0 20px rgba(0,0,0,0.8);
   letter-spacing: 0.02em;

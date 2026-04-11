@@ -10,7 +10,7 @@
       </button>
       <div class="hud-center">
         <span class="hud-super">Galaxy Overview</span>
-        <span class="hud-title">{{ data ? 'Your Scholar System' : '…' }}</span>
+        <span class="hud-title">{{ data ? 'Your Stella Taco' : '…' }}</span>
       </div>
     </header>
 

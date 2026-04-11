@@ -3,8 +3,23 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
+    name: 'taco',
+    component: () => import('@/pages/TacoDashboard.vue'),
+  },
+  {
+    path: '/new',
     name: 'home',
     component: () => import('@/pages/ChatLanding.vue'),
+  },
+  {
+    path: '/galaxy/:id/chat',
+    name: 'chat-galaxy',
+    component: () => import('@/pages/ChatGalaxyPage.vue'),
+  },
+  {
+    path: '/galaxy/:id/loading',
+    name: 'galaxy-loading',
+    component: () => import('@/pages/GalaxyLoadingPage.vue'),
   },
   {
     path: '/galaxy/:id',

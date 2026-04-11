@@ -1,6 +1,52 @@
 <template>
   <div class="solar-view" ref="containerRef">
-    <!-- Back button -->
+    <!-- Desktop nav card: Home + Chat (top-left) -->
+    <nav class="scene-nav-stack">
+      <button class="nav-pill" @click="router.push('/')" aria-label="Dashboard">
+        <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+          <path d="M1.5 7.5L7.5 2l6 5.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M3 6.5V13h3.5v-3.5h2V13H12V6.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="nav-pill-label">Home</span>
+      </button>
+      <button class="nav-pill" @click="router.push(`/galaxy/${route.params.id}/chat`)" aria-label="Chat">
+        <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+          <path d="M2 2h11v9H8l-3 2V11H2V2z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="nav-pill-label">Chat</span>
+      </button>
+    </nav>
+
+    <!-- Mobile hamburger (top-right) -->
+    <div class="nav-hamburger-wrap">
+      <button class="nav-hamburger-btn" @click="menuOpen = !menuOpen" :aria-label="menuOpen ? 'Close menu' : 'Menu'">
+        <svg v-if="!menuOpen" width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <svg v-else width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <Transition name="menu-drop">
+        <nav v-if="menuOpen" class="nav-dropdown">
+          <button class="nav-drop-item" @click="router.push('/'); menuOpen = false">
+            <svg width="14" height="14" viewBox="0 0 15 15" fill="none">
+              <path d="M1.5 7.5L7.5 2l6 5.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M3 6.5V13h3.5v-3.5h2V13H12V6.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Home
+          </button>
+          <button class="nav-drop-item" @click="router.push(`/galaxy/${route.params.id}/chat`); menuOpen = false">
+            <svg width="14" height="14" viewBox="0 0 15 15" fill="none">
+              <path d="M2 2h11v9H8l-3 2V11H2V2z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Chat
+          </button>
+        </nav>
+      </Transition>
+    </div>
+
+    <!-- Back to galaxy (bottom-left) -->
     <button class="back-btn" @click="navigateBack" aria-label="Back to galaxy">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
         <path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -16,16 +62,20 @@
       </div>
     </Transition>
 
-    <!-- HTML planet label overlays (hide the one currently open in the drawer) -->
+    <!-- HTML planet label overlays.
+         Position + opacity are written directly in onFrame() to avoid Vue's
+         1-frame async lag during camera drag. v-show (display) and the
+         visited dot class are still reactive — they only change on user actions. -->
     <div
-      v-for="lbl in labelPositions"
+      v-for="lbl in staticPlanetLabels"
       v-show="lbl.id !== currentRightPlanet?.id"
       :key="lbl.id"
       class="planet-label"
-      :style="{ left: lbl.x + 'px', top: lbl.y + 'px', opacity: lbl.opacity, '--lc': lbl.color }"
+      :style="{ '--lc': lbl.color }"
+      :ref="(el) => { if (el) planetLabelElMap.set(lbl.id, el as HTMLElement) }"
     >
       {{ lbl.title }}
-      <span class="planet-dot" :class="{ visited: lbl.visited }" />
+      <span class="planet-dot" :class="{ visited: visitedPlanetIds.has(lbl.id) }" />
     </div>
 
     <!-- Flying soul (GSAP DOM element) -->
@@ -43,13 +93,14 @@
     <!-- Nav veil -->
     <div class="nav-veil" ref="veilRef" />
 
-    <!-- Story reader (left rail) -->
+    <!-- Story reader (left rail) — trigger offset below Home + Chat pills -->
     <StoryReader
       v-if="meshData"
       ref="storyReaderRef"
       :stories="meshData.stories"
       :galaxy-data="meshData"
       :can-go-back="leftCanGoBack"
+      :trigger-top="isMobile ? 22 : 104"
       @visit-planet="onStoryVisitPlanet"
       @highlight-concepts="onHighlightConcepts"
       @navigate-to-planet="onNavigateToPlanet"
@@ -94,20 +145,13 @@
       @open="onHudOpenConcept"
     />
 
-    <!-- Onboarding tooltips (first galaxy only) -->
-    <template v-if="isFirstGalaxy">
-      <OnboardingTooltip
-        storage-key="ss.onboard.solarsystem"
-        text="Planets hold the knowledge. Souls float between them — click to collect."
-        position="bottom-center"
-      />
-      <OnboardingTooltip
-        storage-key="ss.onboard.stories"
-        text="Characters journey through this galaxy — read their stories."
-        position="top-left"
-        :offset="{ top: '72px', left: '22px' }"
-      />
-    </template>
+    <!-- Onboarding tooltip (first galaxy only) -->
+    <OnboardingTooltip
+      v-if="isFirstGalaxy"
+      storage-key="ss.onboard.solarsystem"
+      text="Planets hold the knowledge. Souls float between them — click to collect."
+      position="bottom-center"
+    />
   </div>
 </template>
 
@@ -132,6 +176,9 @@ import { useIsMobile } from '@/composables/useIsMobile'
 const route  = useRoute()
 const router = useRouter()
 const { data: meshData, galaxyId, visitedPlanetIds, collectedConceptIds, markPlanetVisited, collectConcept, loadFromApi, getOrGenerateSystemPreset } = useMeshStore()
+
+// ── Mobile nav menu ───────────────────────────────────────────────────────────
+const menuOpen = ref(false)
 
 // ── Onboarding: only show for the user's very first galaxy ────────────────
 const FIRST_GALAXY_KEY = 'ss.firstGalaxyId'
@@ -187,9 +234,15 @@ const currentRightConceptColor = computed(() =>
   currentRightConcept.value ? conceptHex(currentRightConcept.value.id) : '#b5a0ff',
 )
 
-// ── Overlay types ─────────────────────────────────────────────────────────────
-interface LabelPos { id: string; x: number; y: number; opacity: number; title: string; color: string; visited: boolean }
-const labelPositions = ref<LabelPos[]>([])
+// ── HTML label overlays ────────────────────────────────────────────────────────
+// staticPlanetLabels drives v-for (set once at build — id/title/color only).
+// Per-frame position + opacity are written directly to DOM elements via
+// planetLabelElMap, bypassing Vue reactivity to eliminate drag wobble.
+interface StaticPlanetLabel { id: string; title: string; color: string }
+const staticPlanetLabels = ref<StaticPlanetLabel[]>([])
+const planetLabelElMap   = new Map<string, HTMLElement>()
+const planetLabelHalfW   = new Map<string, number>()  // cached half-widths
+const _planetTmp         = new THREE.Vector3()        // reused each frame
 
 // Per-frame world anchors (labels only — souls are now 3D sprites)
 const labelWorldData: Array<{ id: string; pos: THREE.Vector3; title: string; color: string; baseRadius: number }> = []
@@ -937,6 +990,9 @@ function buildScene() {
   occlusionMeshes  = []
   soulClickables   = []
   labelWorldData.splice(0)
+  staticPlanetLabels.value = []
+  planetLabelElMap.clear()
+  planetLabelHalfW.clear()
 
   // ── Central sun (particle formation — same preset + color as galaxy view) ───
   // Uses SYSTEM_COLORS (mirrors GalaxyView) so the sun matches the cluster
@@ -1055,6 +1111,7 @@ function buildScene() {
     clickableMeshes.push(mesh)
     occlusionMeshes.push(mesh)
     labelWorldData.push({ id: planet.id, pos: pos.clone(), title: planet.title, color: hex, baseRadius: r })
+    staticPlanetLabels.value.push({ id: planet.id, title: planet.title, color: hex })
   })
 
   // ── Planet-to-planet connection lines (hidden until a planet is opened) ───
@@ -1168,22 +1225,48 @@ function buildScene() {
     .map((id) => data.concepts[id])
     .filter(Boolean)
 
+  // Track placed soul positions so later souls can repel from earlier ones
+  const placedSoulPositions: THREE.Vector3[] = []
+  const SOUL_MIN_SEP = 9  // minimum centre-to-centre distance between souls
+
   concepts.forEach((concept, i) => {
     const hex  = conceptHex(concept.id)
     const rngC = seededRng(concept.id + 'dist')
-    // Random direction on sphere: uniform spherical sampling via seeded RNG
-    const cosTheta = rngC() * 2 - 1
-    const sinTheta = Math.sqrt(Math.max(0, 1 - cosTheta * cosTheta))
-    const azimuth  = rngC() * Math.PI * 2
-    const dir = new THREE.Vector3(sinTheta * Math.cos(azimuth), cosTheta, sinTheta * Math.sin(azimuth))
-    const dist = 22 + rngC() * 18  // inner-to-mid belt (22–40)
-    const pos  = dir.multiplyScalar(dist)
 
-    // Push soul away from any planet it's too close to
-    for (let iter = 0; iter < 10; iter++) {
+    // Helper: seeded random unit direction
+    const randomDir = () => {
+      const cosT = rngC() * 2 - 1
+      const sinT = Math.sqrt(Math.max(0, 1 - cosT * cosT))
+      const az   = rngC() * Math.PI * 2
+      return new THREE.Vector3(sinT * Math.cos(az), cosT, sinT * Math.sin(az))
+    }
+
+    const pos = new THREE.Vector3()
+
+    // Anchor near a connected planet in this scene if possible
+    let anchored = false
+    for (const pid of concept.planetConnections) {
+      const pmesh = planetMeshes.get(pid)
+      if (pmesh) {
+        const pRadius = pmesh.userData.baseRadius as number
+        const gap = pRadius + 3 + rngC() * 6
+        pos.copy(pmesh.position).addScaledVector(randomDir(), gap)
+        anchored = true
+        break
+      }
+    }
+
+    if (!anchored) {
+      pos.copy(randomDir().multiplyScalar(22 + rngC() * 18))
+    }
+
+    // Push soul away from planets AND already-placed souls
+    for (let iter = 0; iter < 20; iter++) {
       let moved = false
+
+      // Planet repulsion — no overlap
       for (const pmesh of planetMeshes.values()) {
-        const minSep = (pmesh.userData.baseRadius as number) + 6
+        const minSep = (pmesh.userData.baseRadius as number) + 4
         const sep = pos.distanceTo(pmesh.position)
         if (sep < minSep) {
           const pushDir = pos.clone().sub(pmesh.position).normalize()
@@ -1191,8 +1274,23 @@ function buildScene() {
           moved = true
         }
       }
+
+      // Soul-to-soul repulsion — same minimum spread as planets have from each other
+      for (const other of placedSoulPositions) {
+        const sep = pos.distanceTo(other)
+        if (sep < SOUL_MIN_SEP) {
+          const pushDir = pos.clone().sub(other)
+          if (pushDir.lengthSq() < 0.0001) pushDir.set(rngC() - 0.5, rngC() - 0.5, rngC() - 0.5)
+          pushDir.normalize()
+          pos.copy(other).addScaledVector(pushDir, SOUL_MIN_SEP)
+          moved = true
+        }
+      }
+
       if (!moved) break
     }
+
+    placedSoulPositions.push(pos.clone())
 
     const mat    = makeSoulSpriteMat(hex)
     const sprite = new THREE.Sprite(mat)
@@ -1275,28 +1373,27 @@ function onFrame(elapsed: number) {
     sprite.scale.set(4 * pulse, 4.67 * pulse, 1)
   })
 
-  // Planet labels
-  const tmp = new THREE.Vector3()
-  const w   = containerRef.value.clientWidth
-  const h   = containerRef.value.clientHeight
-  const updatedLabels: LabelPos[] = []
+  // Planet labels — write directly to DOM to stay in sync with WebGL frame.
+  // Reactive ref updates schedule a microtask, lagging 1 frame behind and
+  // causing visible wobble during camera drag.
+  const w = containerRef.value.clientWidth
+  const h = containerRef.value.clientHeight
   for (const lbl of labelWorldData) {
+    const el   = planetLabelElMap.get(lbl.id)
     const mesh = planetMeshes.get(lbl.id)
-    if (!mesh) continue
-    tmp.copy(mesh.position)
-    tmp.project(cam)
-    const sx = (tmp.x * 0.5 + 0.5) * w
-    const sy = (-tmp.y * 0.5 + 0.5) * h
-    const dist = cam.position.distanceTo(mesh.position)
-    const opacity = tmp.z < 1 ? Math.max(0, Math.min(1, (120 - dist) / 40)) : 0
-    const r = lbl.baseRadius * mesh.scale.x
-    updatedLabels.push({
-      id: lbl.id, x: sx, y: sy - r * (h / (dist + 0.01)) - 14,
-      opacity, title: lbl.title, color: lbl.color,
-      visited: visitedPlanetIds.value.has(lbl.id),
-    })
+    if (!el || !mesh) continue
+    _planetTmp.copy(mesh.position)
+    _planetTmp.project(cam)
+    const sx      = (_planetTmp.x * 0.5 + 0.5) * w
+    const sy      = (-_planetTmp.y * 0.5 + 0.5) * h
+    const dist    = cam.position.distanceTo(mesh.position)
+    const opacity = _planetTmp.z < 1 ? Math.max(0, Math.min(1, (120 - dist) / 40)) : 0
+    const r       = lbl.baseRadius * mesh.scale.x
+    let halfW = planetLabelHalfW.get(lbl.id) ?? 0
+    if (!halfW && el.offsetWidth) { halfW = el.offsetWidth / 2; planetLabelHalfW.set(lbl.id, halfW) }
+    el.style.transform = `translate(${sx - halfW}px, ${sy - r * (h / (dist + 0.01)) - 14}px)`
+    el.style.opacity   = String(opacity)
   }
-  labelPositions.value = updatedLabels
 }
 
 // ── Raycasting ─────────────────────────────────────────────────────────────────
@@ -1374,10 +1471,12 @@ function flyToPlanet(planetId: string, openDrawer: boolean) {
 function openPlanetById(planetId: string) {
   const planet = meshData.value?.planets[planetId]
   if (!planet) return
-  // Collapse the story drawer (preserving its state) so only one rail is
-  // visible at a time. The Stories trigger now shows a "Resume" affordance.
-  storyReaderRef.value?.collapse()
-  if (isMobile.value) leftStack.clear()
+  // On mobile: collapse story so only one rail is visible at a time.
+  // On desktop: story and planet drawer coexist (left + right rails).
+  if (isMobile.value) {
+    storyReaderRef.value?.collapse()
+    leftStack.clear()
+  }
   // Direct map click: replace so the back-stack doesn't grow; wikilinks push separately
   if (rightStack.depth.value > 0) rightStack.replace({ type: 'planet', id: planetId })
   else rightStack.push({ type: 'planet', id: planetId })
@@ -1531,19 +1630,32 @@ function onStoryVisitPlanet(planetId: string) {
   const targetSysId = sameSystem ? null : findSystemForPlanet(planetId)
   if (!sameSystem && !targetSysId) return
 
-  // Close any open drawers first. `collapse()` preserves the story state
-  // so the trigger keeps showing the Resume affordance.
-  const storyWasOpen     = storyReaderRef.value?.getCurrentState().isOpen ?? false
+  // Capture story state before collapsing so we can reopen after the transition.
+  const storyState       = storyReaderRef.value?.getCurrentState()
+  const storyWasOpen     = storyState?.isOpen ?? false
+  const activeStoryId    = storyState?.storyId ?? null
+  const activeSceneIdx   = storyState?.sceneIndex ?? 0
+
   const planetDrawerOpen = rightStack.depth.value > 0
   const needsCloseAnim   = storyWasOpen || planetDrawerOpen
+
+  // Always collapse story during the transition so the camera fly is unobstructed.
   if (storyWasOpen)     storyReaderRef.value?.collapse()
   if (planetDrawerOpen) rightStack.clear()
 
   const proceed = () => {
     if (sameSystem) {
       flyToPlanet(planetId, true)
+      // Desktop: reopen story after fly (≤950ms) + drawer slide-in (350ms).
+      // Mobile: leave collapsed — user can tap the trigger to resume.
+      if (!isMobile.value && storyWasOpen && activeStoryId) {
+        setTimeout(() => {
+          storyReaderRef.value?.openByIdAtScene(activeStoryId, activeSceneIdx)
+        }, 1400)
+      }
     } else {
       travelToOtherSystemPlanet(planetId, targetSysId!)
+      // Cross-system: story reopen is handled by applyDeepLinkQuery on arrival.
     }
   }
 
@@ -1563,10 +1675,12 @@ function openConcept(conceptId: string, fromMap = false) {
   const concept = meshData.value?.concepts[conceptId]
   if (!concept) return
   collectConcept(conceptId) // no-op if already collected
-  // Collapse the story drawer (preserving its state) so only one rail is
-  // visible at a time. Stories trigger now shows the "Resume" affordance.
-  storyReaderRef.value?.collapse()
-  if (isMobile.value) leftStack.clear()
+  // On mobile: collapse story so only one rail is visible at a time.
+  // On desktop: story and concept drawer coexist.
+  if (isMobile.value) {
+    storyReaderRef.value?.collapse()
+    leftStack.clear()
+  }
   // Direct map click replaces current drawer; wikilink/HUD clicks push onto the stack
   if (fromMap && rightStack.depth.value > 0) rightStack.replace({ type: 'concept', id: conceptId })
   else rightStack.push({ type: 'concept', id: conceptId })
@@ -1605,6 +1719,9 @@ function onStoryClose() { leftStack.clear() }
  * 3D scene if they want to revisit it.
  */
 function onStoryOpened() {
+  // On mobile: clear the right rail and return camera to neutral — one rail at a time.
+  // On desktop: story (left) and planet/concept (right) rails coexist; don't disturb either.
+  if (!isMobile.value) return
   if (rightStack.depth.value === 0) return
   rightStack.clear()
   if (sceneCtx) {
@@ -1637,15 +1754,21 @@ function applyDeepLinkQuery() {
     onOpenStory(storyQ)
   }
 
-  // Cross-system arrival: restore the story state internally without
-  // opening the drawer. The planet drawer takes focus on arrival; the
-  // Stories trigger shows a "Resume" affordance so the user can pick up
-  // where they left off when they're done with the planet.
+  // Cross-system arrival with a story in-flight.
+  // Desktop: auto-reopen the story once the planet drawer has settled (both rails coexist).
+  // Mobile: restore state silently — Stories trigger shows the "Resume" affordance.
   if (fromStoryQ && meshData.value?.stories.find((s) => s.id === fromStoryQ)) {
     const sceneIdx = parseInt(storySceneQ ?? '0', 10) || 0
-    setTimeout(() => {
-      storyReaderRef.value?.restoreState(fromStoryQ, sceneIdx)
-    }, 200)
+    if (isMobile.value) {
+      setTimeout(() => {
+        storyReaderRef.value?.restoreState(fromStoryQ, sceneIdx)
+      }, 200)
+    } else {
+      // Wait for planet drawer slide-in (350ms) + a short settle before reopening the story.
+      setTimeout(() => {
+        storyReaderRef.value?.openByIdAtScene(fromStoryQ, sceneIdx)
+      }, 700)
+    }
   }
 
   // Strip the query so a refresh doesn't re-open the drawer.
@@ -1665,7 +1788,7 @@ let bypassLeaveGuard = false
 // Intercepts browser back-button (and any other navigation away from this view).
 // Cancels the nav, plays the warp-out animation, then re-fires the navigation
 // with bypassLeaveGuard=true so it goes straight through on the second pass.
-onBeforeRouteLeave((_to, _from, next) => {
+onBeforeRouteLeave((to, _from, next) => {
   if (bypassLeaveGuard) {
     bypassLeaveGuard = false
     next()
@@ -1676,7 +1799,7 @@ onBeforeRouteLeave((_to, _from, next) => {
     next()
     return
   }
-  // Browser-initiated navigation: cancel, animate, then re-push to galaxy.
+  // Browser-initiated navigation: cancel, animate, then re-fire to the original destination.
   next(false)
   navigating.value = true
   if (sceneCtx) sceneCtx.controls.enabled = false
@@ -1686,7 +1809,7 @@ onBeforeRouteLeave((_to, _from, next) => {
       triggerWarp(700, 'in')
       setTimeout(() => {
         bypassLeaveGuard = true
-        router.push({ name: 'galaxy', params: { id: route.params.id } })
+        router.push(to)
       }, 380)
     },
   })
@@ -1751,8 +1874,8 @@ onMounted(async () => {
     // High threshold means only the brightest pixels (hero stars + sun core)
     // bloom — textured planets stay clean even with strength bumped up.
     bloomStrength:  0.18,
-    bloomRadius:    0.35,
-    bloomThreshold: 0.6,
+    bloomRadius:    0,
+    bloomThreshold: 0.65,
     starCount: 1800,
     heroStarCount: 90,
     nebulaCount: 6,
@@ -1816,9 +1939,111 @@ onUnmounted(() => {
   background: #02040a; opacity: 0; pointer-events: none;
 }
 
+/* ── Scene nav stack (top-left: Home + Chat grouped card) ─────────── */
+.scene-nav-stack {
+  position: absolute;
+  top: 22px; left: 22px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: rgba(7, 10, 22, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+  backdrop-filter: blur(18px);
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.nav-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 13px;
+  font-family: var(--font-ui, sans-serif);
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: rgba(255,255,255,0.48);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  cursor: pointer;
+  transition: color 0.16s, background 0.16s;
+  white-space: nowrap;
+}
+.nav-pill:last-child { border-bottom: none; }
+.nav-pill:hover {
+  color: rgba(255,255,255,0.9);
+  background: rgba(255,255,255,0.06);
+}
+.nav-pill-label {
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* Desktop only — hide hamburger */
+.nav-hamburger-wrap { display: none; }
+
+@media (max-width: 768px) {
+  /* Hide the desktop card */
+  .scene-nav-stack { display: none; }
+
+  /* Hamburger wrapper: top-right */
+  .nav-hamburger-wrap {
+    display: block;
+    position: absolute;
+    top: 22px; right: 22px;
+    z-index: 30;
+  }
+
+  .nav-hamburger-btn {
+    width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(7, 10, 22, 0.82);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 10px;
+    backdrop-filter: blur(18px);
+    color: rgba(255,255,255,0.7);
+    cursor: pointer;
+    transition: color 0.16s, background 0.16s;
+  }
+  .nav-hamburger-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
+
+  .nav-dropdown {
+    position: absolute;
+    top: calc(100% + 8px); right: 0;
+    display: flex; flex-direction: column;
+    background: rgba(7, 10, 22, 0.92);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+    backdrop-filter: blur(20px);
+    overflow: hidden;
+    min-width: 140px;
+  }
+
+  .nav-drop-item {
+    display: flex; align-items: center; gap: 9px;
+    height: 40px; padding: 0 16px;
+    font-family: var(--font-ui, sans-serif);
+    font-size: 0.78rem; font-weight: 500;
+    color: rgba(255,255,255,0.75);
+    background: transparent; border: none;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    cursor: pointer; text-align: left;
+    transition: color 0.14s, background 0.14s;
+  }
+  .nav-drop-item:last-child { border-bottom: none; }
+  .nav-drop-item:hover { color: #fff; background: rgba(255,255,255,0.07); }
+
+  .menu-drop-enter-active { transition: opacity 0.15s ease, transform 0.15s ease; }
+  .menu-drop-leave-active { transition: opacity 0.12s ease, transform 0.12s ease; }
+  .menu-drop-enter-from, .menu-drop-leave-to { opacity: 0; transform: translateY(-6px); }
+}
+
 .back-btn {
-  /* Bottom-left corner. The Stories trigger sits at the top-left, the souls
-     HUD at the bottom-right — back button takes the bottom-left corner. */
+  /* Bottom-left corner. Home + Chat sit at the top-left via .scene-nav-stack.
+     Stories trigger is below them (triggerTop=118). Souls HUD is top-right. */
   position: absolute; bottom: 22px; left: 22px; z-index: 20;
   display: flex; align-items: center; gap: 7px;
   height: 40px;
@@ -1860,12 +2085,14 @@ onUnmounted(() => {
 /* Planet labels */
 .planet-label {
   position: absolute;
+  left: 0; top: 0; /* anchor — onFrame writes the full translate() */
   display: flex; align-items: center; gap: 4px;
-  font-size: 10px; font-weight: 500;
-  color: rgba(255,255,255,0.7);
-  pointer-events: none; transform: translateX(-50%);
-  white-space: nowrap; letter-spacing: 0.03em;
-  text-shadow: 0 0 8px rgba(0,0,0,0.85);
+  font-size: 13px; font-weight: 600;
+  color: rgba(255,255,255,0.82);
+  pointer-events: none;
+  will-change: transform, opacity;
+  white-space: nowrap; letter-spacing: 0.02em;
+  text-shadow: 0 1px 10px rgba(0,0,0,1), 0 0 18px rgba(0,0,0,0.8);
   z-index: 15;
 }
 .planet-dot {
