@@ -11,6 +11,7 @@ import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { generateJson } from "./gemini";
 import { mapViaLimiter, type Limiter } from "../lib/concurrency";
+import { canonicalizeGeneratedWikilinks } from "../lib/wikilinks";
 import { writeStory } from "../workspace/write";
 import type { PipelineContext, StoryCtx } from "./context";
 import { allPlanets, allConcepts } from "./context";
@@ -270,9 +271,22 @@ export async function runWriteStoriesStage(
       return;
     }
 
-    story.introduction = out.introduction;
-    story.scenes = cleanScenes;
-    story.conclusion = out.conclusion;
+    const allowedPlanetTitles = plannedPlanets.map((p) => p.title);
+    story.introduction = canonicalizeGeneratedWikilinks(out.introduction, {
+      planets: allowedPlanetTitles,
+      concepts: story.drivingConceptTitles,
+    });
+    story.scenes = cleanScenes.map((scene) => ({
+      planetTitle: scene.planetTitle,
+      markdown: canonicalizeGeneratedWikilinks(scene.markdown, {
+        planets: allowedPlanetTitles,
+        concepts: story.drivingConceptTitles,
+      }),
+    }));
+    story.conclusion = canonicalizeGeneratedWikilinks(out.conclusion, {
+      planets: allowedPlanetTitles,
+      concepts: story.drivingConceptTitles,
+    });
 
     writeStory(ctx.galaxyId, {
       id: story.id,
