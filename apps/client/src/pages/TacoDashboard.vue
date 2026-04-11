@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import GalaxyRenderer from '@/components/GalaxyRenderer.vue'
 import ConstellationGlyph from '@/components/ConstellationGlyph.vue'
+import { logout, currentUser } from '@/lib/auth'
 import {
   deleteGalaxy,
   publishToTaco,
@@ -168,6 +169,18 @@ function openGalaxy(g: GalaxyRowSummary) {
   router.push({ path: `/galaxy/${g.id}/chat`, state: { title: g.title } })
 }
 
+const logoutConfirm = ref(false)
+
+function handleLogout() {
+  logoutConfirm.value = true
+}
+
+function confirmLogout() {
+  logoutConfirm.value = false
+  logout()
+  router.push('/login')
+}
+
 // ── The Taco ───────────────────────────────────────────────────────
 const gallerySort = ref<GallerySortOrder>('newest')
 const gallerySearch = ref('')
@@ -246,18 +259,30 @@ onUnmounted(() => document.removeEventListener('mousedown', onSortClickOutside))
     <div class="noise" />
     <div class="vignette" />
 
+    <!-- Scrollable content layer -->
+    <div class="taco-scroll">
+
     <!-- Header -->
     <header class="taco-header">
       <a href="/" class="logo-link" aria-label="Stella Taco">
         <img src="/logo.png" alt="Stella Taco" class="logo" />
         <span class="wordmark">STELLA&nbsp;TACO</span>
       </a>
-      <button class="new-galaxy-btn" @click="router.push('/new')">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-          <path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-        New Galaxy
-      </button>
+      <div class="header-actions">
+        <button class="new-galaxy-btn" @click="router.push('/new')">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span class="new-galaxy-label">New Galaxy</span>
+        </button>
+        <button v-if="currentUser" class="user-btn" @click="handleLogout" title="Sign out">
+          <span class="user-avatar">{{ currentUser.username.slice(0,1).toUpperCase() }}</span>
+          <span class="user-name">{{ currentUser.username }}</span>
+          <svg class="user-logout-icon" width="12" height="12" viewBox="0 0 14 14" fill="none">
+            <path d="M5 2H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3M9 10l3-3-3-3M13 7H5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
     </header>
 
     <!-- Hero -->
@@ -509,6 +534,20 @@ onUnmounted(() => document.removeEventListener('mousedown', onSortClickOutside))
       </div>
     </Transition>
 
+    <!-- ── Sign out confirm ──────────────────────────────────── -->
+    <Transition name="dialog-fade">
+      <div v-if="logoutConfirm" class="dialog-backdrop" @click.self="logoutConfirm = false">
+        <div class="dialog">
+          <p class="dialog-title">Sign out?</p>
+          <p class="dialog-body">You'll be returned to the login screen.</p>
+          <div class="dialog-actions">
+            <button class="dialog-btn cancel" @click="logoutConfirm = false">Cancel</button>
+            <button class="dialog-btn confirm" @click="confirmLogout">Sign out</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
     <!-- ── Edit tagline modal ─────────────────────────────────── -->
     <Transition name="dialog-fade">
       <div v-if="editTaglineId" class="dialog-backdrop" @click.self="closeEditTagline">
@@ -537,17 +576,29 @@ onUnmounted(() => document.removeEventListener('mousedown', onSortClickOutside))
         </div>
       </div>
     </Transition>
+
+    </div> <!-- /taco-scroll -->
   </main>
 </template>
 
 <style scoped>
 .taco-page {
-  position: relative;
-  min-height: 100dvh;
-  width: 100%;
-  overflow-x: hidden;
+  position: fixed;
+  inset: 0;
   background: #02040a;
   color: var(--color-text-primary, #f5f0ea);
+  overflow: hidden;
+}
+
+/* Inner scroll container — only this moves, background stays still */
+.taco-scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: none;
+  z-index: 5;
 }
 
 /* ── Background ─────────────────────────────────────────────────── */
@@ -557,6 +608,8 @@ onUnmounted(() => document.removeEventListener('mousedown', onSortClickOutside))
   filter: blur(110px);
   pointer-events: none;
   z-index: 1;
+  will-change: transform;
+  transform: translateZ(0);
 }
 .nebula-1 {
   width: 600px; height: 600px;
@@ -623,8 +676,59 @@ onUnmounted(() => document.removeEventListener('mousedown', onSortClickOutside))
 .logo-link:hover { opacity: 1; }
 .logo { width: 110px; height: auto; display: block; user-select: none; }
 .wordmark { font-family: var(--font-ui, sans-serif); font-size: 0.78rem; font-weight: 500; letter-spacing: 0.28em; color: var(--color-text-primary, #f5f0ea); opacity: 0.8; user-select: none; }
+.header-actions { display: flex; align-items: center; gap: 10px; }
 .new-galaxy-btn { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 18px; font-family: var(--font-ui, sans-serif); font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em; color: #f5f0ea; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); border-radius: 100px; cursor: pointer; transition: background 200ms, border-color 200ms; }
 .new-galaxy-btn:hover { background: rgba(255,255,255,0.10); border-color: rgba(255,255,255,0.22); }
+
+/* User pill — combines username + sign-out into one control */
+.user-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 38px; padding: 0 14px 0 6px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 100px;
+  cursor: pointer;
+  transition: background 200ms, border-color 200ms;
+}
+.user-btn:hover { background: rgba(255,255,255,0.10); border-color: rgba(255,255,255,0.22); }
+.user-btn:hover .user-logout-icon { opacity: 1; }
+.user-avatar {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: rgba(255,181,71,0.18);
+  border: 1px solid rgba(255,181,71,0.3);
+  color: rgba(255,181,71,0.95);
+  font-family: var(--font-ui, sans-serif);
+  font-size: 0.68rem; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  letter-spacing: 0;
+  line-height: 1;
+  text-align: center;
+}
+.user-name {
+  font-family: var(--font-ui, sans-serif);
+  font-size: 0.75rem; font-weight: 500;
+  color: rgba(245,240,234,0.85);
+  letter-spacing: 0.02em;
+}
+.user-logout-icon {
+  color: rgba(245,240,234,0.45);
+  opacity: 0;
+  transition: opacity 200ms;
+  flex-shrink: 0;
+}
+
+@media (max-width: 600px) {
+  .taco-header { padding: 16px 18px; }
+  .logo { width: 80px; }
+  .wordmark { display: none; }
+  .new-galaxy-btn { width: 38px; height: 38px; padding: 0; justify-content: center; }
+  .new-galaxy-label { display: none; }
+  .user-btn { padding: 0; width: 38px; height: 38px; gap: 0; justify-content: center; align-items: center; }
+  .user-avatar { width: 28px; height: 28px; font-size: 0.72rem; }
+  .user-name, .user-logout-icon { display: none; }
+}
 
 /* ── Hero ───────────────────────────────────────────────────────── */
 .hero-section { position: relative; z-index: 5; text-align: center; padding: 40px 24px 24px; animation: heroIn 900ms cubic-bezier(0.2,0.7,0.2,1) both; }
