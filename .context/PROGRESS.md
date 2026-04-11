@@ -17,13 +17,15 @@ Status: **complete**
 - [x] Onboarding document for teammates
 
 ### Frontend — Chat Landing
-Status: **complete** (carries over from v3)
-- [x] Chat landing page (logo, wordmark, tagline, input, drag-drop)
-- [x] History system (HistoryButton + HistoryOverlay)
+Status: **complete**
+- [x] Chat landing page (logo, wordmark "STELLA TACO", tagline, input, drag-drop)
+- [x] History system removed — replaced by `TacoDashboard` route
+- [x] Loading screen status messages with animated ellipsis + rotating per-stage copy
 - [x] Mobile system (bottom-pinned input, safe-area)
 - [x] Galaxy renderer foundation (ambient cosmic void, nebulae, stars, shooting stars)
 - [x] Black-hole launch sequence (submit -> rocket -> warp -> galaxy)
 - [x] Background polish — drifting/breathing nebula blobs, dot grid overlay, hero glow, noise texture, edge vignette
+- [x] File upload limit: 10 MB total
 
 ### Frontend — 3D Galaxy
 Status: **linked to live backend** — Three.js scene, force-graph, camera system, and the `apps/server-gemini/` API contract are wired together. Remaining work is feature/data polish, not backend linkage.
@@ -73,6 +75,8 @@ Status: **needs rewrite for v4**
 ## Changelog
 
 _Newest at top._
+
+- 2026-04-12 — **UX polish batch + AI galaxy titles** (`main`) — (1) **Project renamed to Stella Taco**: all user-facing copy (page titles, aria-labels, wordmarks, taglines) updated across `ChatLanding.vue`, `TacoDashboard.vue`, `StatsView.vue`, `index.html`, `api.ts`. (2) **AI-generated galaxy titles**: `db/client.ts` gained `updateGalaxyTitle(id, title)`. `pipeline/run.ts` gained `generateGalaxyTitle(ctx)` — fires a single `MODEL_FLASH` call (20 token budget) after both the one-shot and staged pipeline complete; sends solar system titles + one-line descriptions; strips non-alphanum chars; non-fatal (dashboard falls back to user-supplied title on failure). Bug fixed: initial implementation used `prompt:` field (not a valid `GenerateOpts` field) instead of `parts: [{ text: ... }]`. (3) **Journey button removed** from `ChatLanding.vue` — `HistoryButton`, `HistoryOverlay`, `historyOpen` ref, `openHistory`/`closeHistory` functions, `recents` ref, `listRecentGalaxies`/`GalaxyEntry` imports, and related CSS rules all removed. `addRecentGalaxy` kept so the dashboard still sees new galaxies. (4) **"Every one gets wrapped" tagline removed** from chat landing hero. (5) **File size limit: 100 MB → 10 MB** — `TOTAL_SIZE_LIMIT_BYTES` in `apps/client/src/lib/fileTypes.ts`, display label in `ChatInput.vue`, and backend `MAX_TOTAL_BYTES` in `apps/server-gemini/src/routes/galaxy.ts`. (6) **ChatGalaxyPage loading skeleton**: `v-if="loading"` skeleton with shimmer animation (circular glyph placeholder, title/hint bars, input box, log rows) shown while the initial `fetchGalaxyEnvelope` + `fetchSubmissions` are in-flight; content rendered with `v-else` after load. (7) **Loading screen status messages**: animated rotating text above the rocket animation in `ChatLanding.vue` — per-stage `STAGE_MESSAGES` record, fade-cycle with 3s + up-to-2.4s random jitter, 50% more cooldown than initial implementation. Animated ellipsis using per-keyframe `animation-timing-function: step-end` and `width` clipping (fixes "backwards" dot direction). Status pill: frosted-glass, fixed bottom-28%, centered. (8) **Onboarding tooltip relocated**: moved from `SolarSystemView` to `GalaxyView` (positioned below nav, top-left). (9) **Dashboard wordmark sizing**: logo `80px→110px`, wordmark `0.58→0.78rem`, eyebrow `0.6→0.85rem`, mobile logo `60→80px`. (10) **Soul placement near planets**: souls now anchor 3–9 units from the surface of their connected planet (belt fallback if no planet found). Soul-to-soul repulsion added: `SOUL_MIN_SEP=9`, 20 push-apart iterations, tracks `placedSoulPositions[]`. (11) **Unique particle presets**: `getOrGenerateSystemPreset` in `meshStore.ts` now picks from unused presets first, only falls back to full pool when all presets are taken — minimises duplicate formation shapes. (12) **Desktop story+planet two-rail coexistence**: `openPlanetById`, `openConcept`, and `onStoryOpened` in `SolarSystemView` now only force-close the other rail on mobile; desktop keeps both open simultaneously. (13) **Story section click fixed**: `setScene()` in `StoryReader.vue` no longer emits `visit-planet` — only the explicit "Visit planet" button triggers planet navigation. (14) **Same-system story reopen after planet visit**: `onStoryVisitPlanet` in `SolarSystemView` captures story state, then calls `openByIdAtScene` 1400ms after the planet transition (accounts for 950ms fly + 350ms drawer). (15) **Bloom bubble eliminated**: `bloomRadius: 0.35→0` in `SolarSystemView` removes spherical halo spread. (16) **Galaxy compaction**: force-simulation spawn `±30/15→±14/7`, charge `-40→-18`, collide `10→7`.
 
 - 2026-04-12 — **Append pipeline now generates new stories** (`main`) — `append.ts` was never calling `runStoryPitchesStage` / `runWriteStoriesStage`, so appended galaxies only ever had the original story. Fixed by adding `buildFullCtxForStories()` which re-reads the freshly-cached galaxy after all expand work, converts existing `MeshPlanet`/`MeshConcept` records back to `PlanetCtx`/`ConceptCtx` (using first sentence of markdown as `oneLineHook`), merges with any newly-created solar systems in ctx, and runs both story stages on the merged context. New stories are written to the workspace and cached; existing stories are untouched (append is additive).
 
