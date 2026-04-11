@@ -32,14 +32,17 @@ Status: **partially carries over** — Three.js scene, force-graph, camera syste
 - [x] 3D force-directed graph — galaxy view (GalaxyView.vue, d3-force-3d)
 - [x] Particle stream edges
 - [x] Camera fly-in + GSAP transition with warp-speed effect
-- [x] Solar system drill-down (SolarSystemView.vue)
+- [x] Solar system drill-down (SolarSystemView.vue) — textured planets (20 types: 9 real NASA-style + 11 procedural exotic), Saturn rings, particle-formation sun matching galaxy preset
 - [x] HTML overlay labels (3D->2D projection)
 - [x] Warp-speed effect
 - [x] Stats page (StatsView.vue)
 - [x] Mobile support
+- [x] Concept souls — 3D `THREE.Sprite` objects in scene (canvas ghost texture, sine-wave bob, raycasting, collision-avoidance placement, distance opacity, occlusion)
+- [x] Planet visited dots — 5px dot right of label, grey hollow → `#5ba8ff` filled on open, persisted to localStorage
+- [x] Solar system progress rings — SVG circular ring in galaxy labels, `#5ba8ff` arc, tracks visited planets / total, persisted
+- [x] Exploration state persistence — `visitedPlanetIds` + `collectedConceptIds` in `useMeshStore`, backed by localStorage, HUD restored on mount
 - [ ] Rewrite data layer for v4 entity types (SolarSystem/Planet/Concept instead of Cluster/Group/Entry)
 - [ ] Story reader sidebar
-- [ ] Concept overlay (floating soul fragment)
 - [ ] Wikilink rendering in markdown bodies
 
 ### Backend — Pipeline
@@ -68,6 +71,9 @@ Status: **needs rewrite for v4**
 
 _Newest at top._
 
+- 2026-04-11 — **Soul sprites, exploration tracking, progress rings** (`feat/frontend-finalisation`) — Concept souls converted from HTML overlays to `THREE.Sprite` 3D objects (canvas ghost texture, NormalBlending at low alpha for see-through effect, sine-wave bob, raycasting click/hover, collision-avoidance from planets, inner-to-mid belt placement 22–40 units). Bloom dialled way down (strength 0.04, threshold 0.35). Planet labels now show a visited dot (grey hollow → `#5ba8ff` filled). Galaxy view system labels now show an SVG circular progress ring (`#5ba8ff`, always-visible grey track). `useMeshStore` extended with `visitedPlanetIds` + `collectedConceptIds` refs backed by localStorage — both survive refresh. ConceptHUD rehydrated on mount from persisted IDs.
+
+- 2026-04-11 — **SolarSystemView visual overhaul** (`feat/frontend-finalisation`) — replaced monotone glowing spheres with textured planets. 20 planet types seeded from planet ID (type drives both size and surface): 9 real Solar System Scope 2K textures (earth, mars, moon, jupiter, saturn, uranus, neptune, venus, mercury) + 11 exotic procedural canvas textures (lava, ice, desert, toxic, crystal, dead_rock, ocean, gas_purple, ice_giant, molten, void). Saturn type gets `RingGeometry` with radial-UV remapping. Central sun swapped from solid `MeshStandardMaterial` sphere to the same particle formation the galaxy view uses for that system (same `seededRng(sys.id + '_preset')` → shape continuity), scaled to 60%. Textures preload via `THREE.TextureLoader` before `buildScene()` fires; veil stays black as the load screen. Download script at `apps/client/scripts/download-planet-textures.sh` fetches the Solar System Scope pack into `public/textures/planets/`. Lighting fix: Three.js 0.183's physical lights made `PointLight` fall off by inverse-square so the sun light wasn't reaching planets at all — switched to `DirectionalLight` for the key light and added `emissiveMap: tex` so each planet self-lights through its texture regardless of point-light positioning. Thin white `opacity 0.08` connection lines from sun to each planet. `makeExoticTexture` seeds from `planetId + typeId` so two planets of the same exotic type don't look identical.
 - 2026-04-11 — **PIVOT v4: Narrative Galaxy — Markdown Mesh** — data model moved from JSON blob to markdown mesh. Entity types: Source, Solar System, Planet, Concept, Story. Pipeline: 3 stages (Ingest/Structure/Stories). Stories are character-driven narratives. Journey shard built with workflows, templates, skills. Schema spec complete.
 - 2026-04-11 — (superseded) PIVOT v3: Wrap-based Memory Galaxy — every node is a Spotify-Wrapped card. Pipeline 4 stages. Schema 7 scopes. Replaced by v4 same day.
 - 2026-04-11 — (superseded) Phase 4: v3 pipeline cleanup — 18 old files deleted

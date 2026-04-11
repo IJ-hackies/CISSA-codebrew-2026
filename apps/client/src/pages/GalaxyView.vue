@@ -29,6 +29,20 @@
       :style="{ left: lbl.x + 'px', top: lbl.y + 'px', opacity: lbl.opacity, '--lc': lbl.color, fontSize: lbl.fontSize + 'px' }"
     >
       {{ lbl.title }}
+      <svg class="sys-progress-ring" viewBox="0 0 14 14" width="14" height="14">
+        <!-- track -->
+        <circle cx="7" cy="7" r="5" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="1.5"/>
+        <!-- filled arc -->
+        <circle
+          cx="7" cy="7" r="5" fill="none"
+          stroke="#5ba8ff"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          :stroke-dasharray="`${lbl.progress * 31.42} 31.42`"
+          stroke-dashoffset="0"
+          transform="rotate(-90 7 7)"
+        />
+      </svg>
     </div>
 
     <!-- Hover tooltip -->
@@ -60,7 +74,7 @@ import galaxyFixture from '@/fixtures/galaxy-data.json'
 
 // ── Store ─────────────────────────────────────────────────────────────────────
 const router = useRouter()
-const { data: meshData, loadFromFixture } = useMeshStore()
+const { data: meshData, visitedPlanetIds, loadFromFixture } = useMeshStore()
 
 // ── Refs ──────────────────────────────────────────────────────────────────────
 const containerRef = ref<HTMLDivElement>()
@@ -77,7 +91,7 @@ const planetCount      = computed(() => Object.keys(meshData.value?.planets ?? {
 const conceptCount     = computed(() => Object.keys(meshData.value?.concepts ?? {}).length)
 
 // ── HTML overlays ─────────────────────────────────────────────────────────────
-interface LabelPos { id: string; x: number; y: number; opacity: number; title: string; color: string; fontSize: number }
+interface LabelPos { id: string; x: number; y: number; opacity: number; title: string; color: string; fontSize: number; progress: number }
 const labelPositions = ref<LabelPos[]>([])
 const labelWorldData: Array<{ id: string; mesh: THREE.Mesh; title: string; color: string }> = []
 
@@ -659,6 +673,7 @@ function buildGraph() {
     pts.userData = { posA, posB, phases, positions, streamCount, isEdge: true }
     scene.add(pts)
   }
+
 }
 
 // ── Per-frame ─────────────────────────────────────────────────────────────────
@@ -715,7 +730,11 @@ function onFrame(elapsed: number) {
     const r = (lbl.mesh.geometry as THREE.SphereGeometry).parameters.radius * lbl.mesh.scale.x
     // Perspective-correct font scale: bigger as camera closes in, min 9px max 20px
     const fontSize = Math.max(9, Math.min(20, 3.0 * h / dist))
-    updated.push({ id: lbl.id, x: sx, y: sy - r * (h / (dist + 0.01)) - 16, opacity, title: lbl.title, color: lbl.color, fontSize })
+    const sys      = meshData.value?.solarSystems[lbl.id]
+    const total    = sys?.planets.length ?? 0
+    const seen     = total > 0 ? sys!.planets.filter(pid => visitedPlanetIds.value.has(pid)).length : 0
+    const progress = total > 0 ? seen / total : 0
+    updated.push({ id: lbl.id, x: sx, y: sy - r * (h / (dist + 0.01)) - 16, opacity, title: lbl.title, color: lbl.color, fontSize, progress })
   }
   labelPositions.value = updated
 }
@@ -727,6 +746,7 @@ function onMouseMove(e: MouseEvent) {
   mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
   mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(mouse, sceneCtx.camera)
+
   const hits = raycaster.intersectObjects(clickableMeshes)
   if (hits.length > 0) {
     hovered.value = { title: hits[0].object.userData.title }
@@ -744,6 +764,7 @@ function onClick(e: MouseEvent) {
   mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
   mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(mouse, sceneCtx.camera)
+
   const hits = raycaster.intersectObjects(clickableMeshes)
   if (!hits.length) return
 
@@ -754,23 +775,18 @@ function onClick(e: MouseEvent) {
   navigating.value = true
   sceneCtx.controls.enabled = false
 
-  // Fly toward the clicked system, then warp out
   const target = mesh.position.clone()
   const camDir = sceneCtx.camera.position.clone().sub(target).normalize()
   const dest   = target.clone().addScaledVector(camDir, 20)
 
-  // Step 1: drift toward node, keeping the system centered the whole way
   const tl = gsap.timeline({ onUpdate: () => { sceneCtx!.controls.update() } })
   tl.to(sceneCtx.camera.position,  { x: dest.x,   y: dest.y,   z: dest.z,   duration: 0.65, ease: 'power2.in' }, 0)
   tl.to(sceneCtx.controls.target,  { x: target.x, y: target.y, z: target.z, duration: 0.65, ease: 'power2.in' }, 0)
 
-  // Step 2: fade veil to black (starts immediately, completes at 0.65s)
   gsap.to(veilRef.value, {
     opacity: 1, duration: 0.65, ease: 'power2.in',
     onComplete: () => {
-      // Step 3: warp 'out' plays on the pure-black screen (stars shoot outward)
       triggerWarp(700, 'out')
-      // Step 4: navigate partway through warp so new scene loads while stars are flying
       setTimeout(() => {
         router.push({ name: 'solar-system', params: { id: 'demo', clusterId: systemId } })
       }, 380)
@@ -858,6 +874,7 @@ onUnmounted(() => {
 
 .node-label {
   position: absolute;
+  display: flex; align-items: center; gap: 5px;
   font-size: 15px; /* overridden per-element by inline style */
   font-weight: 600;
   color: rgba(255,255,255,0.88);
@@ -866,6 +883,10 @@ onUnmounted(() => {
   white-space: nowrap;
   text-shadow: 0 1px 12px rgba(0,0,0,1), 0 0 20px rgba(0,0,0,0.8);
   letter-spacing: 0.02em;
+}
+.sys-progress-ring {
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 4px #5ba8ff);
 }
 
 .node-tooltip {

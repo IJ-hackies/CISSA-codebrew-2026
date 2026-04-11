@@ -32,7 +32,7 @@ The fixture at `src/fixtures/galaxy-data.json` contains real parsed test data (3
 `src/lib/meshStore.ts` provides a Vue composable wrapping both loading methods:
 
 ```ts
-const { data, loadFromApi, loadFromFixture, clear } = useMeshStore()
+const { data, visitedPlanetIds, collectedConceptIds, persistSet, loadFromApi, loadFromFixture, clear } = useMeshStore()
 
 // Server:
 await loadFromApi('some-galaxy-id')
@@ -45,6 +45,11 @@ data.value.planets, data.value.stories, etc.
 ```
 
 `data` is a shared `ref<GalaxyData | null>` — all components using `useMeshStore()` see the same data.
+
+**Exploration state** — also module-level singletons, persisted to localStorage:
+- `visitedPlanetIds` — `ref<Set<string>>` of planet IDs opened via the drawer. Written by `openPlanetById` in `SolarSystemView`. Read by label projection to show the visited dot. Read by `GalaxyView` to compute per-system progress ring fill.
+- `collectedConceptIds` — `ref<Set<string>>` of concept IDs whose souls have been collected. Written by `collectSoul`. Drives sprite visibility (collected → hidden). `ConceptHUD` rehydrates from this on mount.
+- `persistSet(key, set)` — write a `Set<string>` to localStorage. Keys: `scholarSystem.visitedPlanets`, `scholarSystem.collectedConcepts`.
 
 ## Types
 
@@ -113,9 +118,11 @@ const edges = [
 ```
 
 **Visual treatment:**
-- Planets → solid spheres (orbiting bodies in a solar system)
-- Concepts → floating fragments / ethereal particles (soul fragments)
-- Solar systems → grouping containers (each has its own set of planets)
+- Planets → textured spheres. 20 planet types seeded from planet ID — 9 use real Solar System Scope 2K textures (earth, mars, moon, jupiter, saturn, uranus, neptune, venus, mercury), 11 use exotic procedural canvas textures (lava, ice, desert, toxic, crystal, dead_rock, ocean, gas_purple, ice_giant, molten, void). Type drives both radius and surface. Saturn type renders `RingGeometry` with radially-remapped UVs. Textures preload via `THREE.TextureLoader` before `buildScene()` runs; to populate `public/textures/planets/`, run `bash apps/client/scripts/download-planet-textures.sh`.
+- Concepts → `THREE.Sprite` objects in the solar system scene. Ghost silhouette drawn on a canvas texture (coloured glow pass at α=0.12 + solid body at α=0.28 + black eyes). `NormalBlending` + `depthWrite: false` so they're see-through. Placed on a Fibonacci sphere in the inner-to-mid planet belt (22–40 units), with a push-apart loop to keep them clear of planet meshes. Bob via `sin(elapsed × 1.8 + seededPhase)` each frame. Opacity fades with camera distance. Highlighted (from story reader) → scale pulses at ×1.3. Collected → `sprite.visible = false`. Raycasted for click/hover, checked before planets in the event handlers.
+- Solar systems → each system's central "sun" in `SolarSystemView` is the **same particle formation** that represents it in `GalaxyView` (shared `seededRng(sys.id + '_preset')`), scaled to 60% — so clicking into a system feels like zooming into the node you saw from outside.
+
+**Lighting gotcha (Three.js 0.183+):** Physical lights are the default, which means `PointLight` uses inverse-square falloff — a `PointLight` at the origin with intensity ~2 produces almost nothing at planet distance (30–50 units). `SolarSystemView` works around this by using a `DirectionalLight` as the sun's key light and setting `emissiveMap: tex` on planet materials so surfaces self-light through their own texture regardless of light positioning. If you ever see planets rendering as dark/grey silhouettes, this is almost certainly the cause.
 
 ## Rendering Wikilinks in Markdown
 

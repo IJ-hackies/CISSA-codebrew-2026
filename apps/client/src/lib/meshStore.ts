@@ -19,7 +19,20 @@ import { ref } from 'vue'
 import type { GalaxyData } from '@scholarsystem/shared'
 import { fetchMeshData, loadMeshFromJson } from './meshApi'
 
-const current = ref<GalaxyData | null>(null)
+function loadSet(key: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? new Set(JSON.parse(raw) as string[]) : new Set()
+  } catch { return new Set() }
+}
+
+function persistSet(key: string, ids: Set<string>) {
+  try { localStorage.setItem(key, JSON.stringify([...ids])) } catch { /* noop */ }
+}
+
+const current            = ref<GalaxyData | null>(null)
+const visitedPlanetIds   = ref<Set<string>>(loadSet('scholarSystem.visitedPlanets'))
+const collectedConceptIds = ref<Set<string>>(loadSet('scholarSystem.collectedConcepts'))
 
 export function useMeshStore() {
   /** Load GalaxyData from the mesh parser API. */
@@ -42,6 +55,9 @@ export function useMeshStore() {
 
   return {
     data: current,
+    visitedPlanetIds,
+    collectedConceptIds,
+    persistSet,
     loadFromApi,
     loadFromFixture,
     clear,
