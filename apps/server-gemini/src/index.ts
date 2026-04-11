@@ -21,7 +21,11 @@ galaxiesRoot();
 
 const app = new Hono();
 
-app.use("*", cors());
+app.use("*", cors({
+  origin: "*",
+  allowHeaders: ["Content-Type", "Authorization"],
+  allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+}));
 
 app.get("/api/health", (c) =>
   c.json({ ok: true, service: "scholarsystem-server-gemini" }),
