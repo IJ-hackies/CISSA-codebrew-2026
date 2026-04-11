@@ -176,7 +176,7 @@ import { useIsMobile } from '@/composables/useIsMobile'
 const route  = useRoute()
 const router = useRouter()
 const isTacoView = computed(() => route.query.source === 'taco')
-const { data: meshData, galaxyId, visitedPlanetIds, collectedConceptIds, markPlanetVisited, collectConcept, loadFromApi, getOrGenerateSystemPreset } = useMeshStore()
+const { data: meshData, galaxyId, visitedPlanetIds, collectedConceptIds, markPlanetVisited, collectConcept, loadFromApi, loadFromApiComplete, getOrGenerateSystemPreset } = useMeshStore()
 
 // ── Mobile nav menu ───────────────────────────────────────────────────────────
 const menuOpen = ref(false)
@@ -1874,7 +1874,11 @@ watch(currentRightPlanet, (next, prev) => {
 })
 
 onMounted(async () => {
-  if (!meshData.value) await loadFromApi((route.params.id as string) ?? 'fixture')
+  // Cover the scene immediately so there's never a flash of empty starfield
+  // while planet textures load and planets/souls are built.
+  if (veilRef.value) (veilRef.value as HTMLElement).style.opacity = '1'
+
+  if (!meshData.value) await loadFromApiComplete((route.params.id as string) ?? 'fixture')
   if (!containerRef.value) return
 
   const mobileInit = window.innerWidth < 768
@@ -1905,7 +1909,9 @@ onMounted(async () => {
     originalRender()
   }
 
-  // Preload planet textures, then build scene (veil stays black during load as a natural cover)
+  // Preload planet textures, then build scene. Veil is held at opacity 1 (set
+  // above) until buildScene() completes — planets and souls are all in the
+  // scene before it fades out.
   preloadPlanetTextures(() => {
     buildScene()
 

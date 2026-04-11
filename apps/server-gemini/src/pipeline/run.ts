@@ -177,7 +177,10 @@ async function runStagedPipeline(
 
   setStage(galaxyId, "ingest", `${sourceRows.length} source(s)`);
   await runIngestStage(ctx, sourceRows);
-  persist(galaxyId);
+  // Fire-and-forget: stages consume ctx (in-memory), not the DB.
+  // Persist is only for frontend polling, which runs on a multi-second
+  // interval — a brief async delay is invisible to the user.
+  void Promise.resolve().then(() => persist(galaxyId));
 
   // Input budget is computed ONCE, right after ingest, and drives every
   // downstream stage's counts and word targets. Tiered by RAW INPUT
@@ -195,23 +198,23 @@ async function runStagedPipeline(
 
   setStage(galaxyId, "outline", `${ctx.solarSystems.length} solar system(s)`);
   await runOutlineStage(ctx, budget, proLimiter);
-  persist(galaxyId);
+  void Promise.resolve().then(() => persist(galaxyId));
 
   const planetCount = ctx.solarSystems.reduce((n, s) => n + s.planets.length, 0);
   const conceptCount = ctx.solarSystems.reduce((n, s) => n + s.concepts.length, 0);
   setStage(galaxyId, "expand", `${planetCount} planets, ${conceptCount} concepts`);
 
-  // Planets and concepts both feed into the shared Pro limiter, so
-  // `Promise.all` here does NOT double the in-flight slot count —
-  // the limiter keeps total Pro calls at <= PRO_CONCURRENCY.
+  // Story pitches only needs oneLineHook (set during outline) — it does NOT
+  // need the full expanded planet bodies. Run it concurrently with expand so
+  // its latency (one Flash/Pro call) is absorbed into the expand wall time.
+  // Write-stories needs p.body, so it still waits for all three to finish.
+  setStage(galaxyId, "stories", "pitching");
   await Promise.all([
     runExpandPlanetsStage(ctx, budget, proLimiter),
     runExpandConceptsStage(ctx, budget, proLimiter),
+    runStoryPitchesStage(ctx, budget),
   ]);
-  persist(galaxyId);
-
-  setStage(galaxyId, "stories", "pitching");
-  await runStoryPitchesStage(ctx, budget);
+  void Promise.resolve().then(() => persist(galaxyId));
 
   setStage(
     galaxyId,

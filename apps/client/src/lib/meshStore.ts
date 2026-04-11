@@ -174,6 +174,23 @@ export function useMeshStore() {
   }
 
   /**
+   * Like loadFromApi, but keeps polling until status === 'complete' (or
+   * 'error') before resolving. Use this in views that must not build their
+   * scene until all solar systems, planets, concepts, and stories exist.
+   */
+  async function loadFromApiComplete(id: string): Promise<GalaxyData> {
+    stopPolling()
+    for (;;) {
+      const envelope = await fetchGalaxyEnvelope(id)
+      applyEnvelope(envelope)
+      if (envelope.status === 'complete' || envelope.status === 'error') {
+        return envelope.galaxy
+      }
+      await new Promise<void>((r) => setTimeout(r, POLL_INTERVAL_MS))
+    }
+  }
+
+  /**
    * Load GalaxyData from a static JSON object (no server needed).
    * Pass an optional galaxy id to scope persistence; defaults to a shared
    * fixture id so dev work without a real id still persists consistently.
@@ -263,6 +280,7 @@ export function useMeshStore() {
     visitedPlanetIds,
     collectedConceptIds,
     loadFromApi,
+    loadFromApiComplete,
     loadFromFixture,
     clear,
     markPlanetVisited,

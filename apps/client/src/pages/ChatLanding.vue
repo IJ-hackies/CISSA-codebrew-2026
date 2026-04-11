@@ -212,8 +212,9 @@ onBeforeUnmount(() => {
 const placeholderTitle = computed(() => {
   const trimmed = text.value.trim()
   if (trimmed) return trimmed.slice(0, 48)
-  if (files.value.length) return files.value[0].name.replace(/\.[^.]+$/, '')
-  return 'Untitled galaxy'
+  // Never derive the title from the filename — it leaks into the solar system
+  // name. Send "Untitled" so the pipeline generates a proper thematic title.
+  return 'Untitled'
 })
 
 // Minimum cruise duration so the rocket cinematic still reads even if the
@@ -251,7 +252,9 @@ async function waitForRenderableGalaxy(id: string) {
     if (envelope.status === 'error') {
       throw new Error(envelope.error ?? 'Galaxy generation failed')
     }
-    if (Object.keys(envelope.galaxy.solarSystems).length > 0) {
+    // Wait for the full pipeline (ingest + structure + stories) to complete
+    // before navigating — ensures planets, concepts, and stories are all ready.
+    if (envelope.status === 'complete' && Object.keys(envelope.galaxy.solarSystems).length > 0) {
       return envelope
     }
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))

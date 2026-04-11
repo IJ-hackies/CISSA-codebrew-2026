@@ -107,23 +107,53 @@ export async function runClusterStage(
   // Multi-source uploads always go through the AI cluster call so topics can
   // be separated into distinct solar systems.
   if (n === 1) {
-    // Prefer the user-provided galaxy title; fall back to the AI ingest
-    // title (which is thematic, not a filename). Never use a raw filename.
     const userTitle = ctx.galaxyTitle?.trim();
-    const aiTitle = ctx.sources[0]?.title || "Knowledge Galaxy";
-    const title = (userTitle && userTitle !== "Untitled") ? userTitle : aiTitle;
-    // Write the AI-derived title back to the DB so the dashboard reflects it.
-    if (!userTitle || userTitle === "Untitled") {
-      ctx.galaxyTitle = title;
-      updateGalaxyTitle(ctx.galaxyId, title);
-    }
+    const src = ctx.sources[0];
     const themes = Array.from(
       new Set(ctx.sources.flatMap((s) => s.keyThemes.slice(0, 3))),
     ).slice(0, 5);
+
+    let title: string;
+    if (userTitle && userTitle !== "Untitled") {
+      // User named the galaxy explicitly — honour it.
+      title = userTitle;
+    } else {
+      // Generate a short evocative THEMATIC title via AI so the solar system
+      // label reflects the content, not the document filename or paper title.
+      const themeList = themes.length > 0 ? themes.join(", ") : src.title;
+      const titlePrompt = [
+        `You are naming a solar system in a knowledge galaxy built from a single uploaded document.`,
+        ``,
+        `Document title: ${src.title}`,
+        `Key themes: ${themeList}`,
+        `Tone: ${src.tone}`,
+        ``,
+        `Produce a short evocative title (2-6 words) that captures the THEME of this knowledge.`,
+        `- Do NOT copy the document title verbatim.`,
+        `- Do NOT include words like "document", "source", "file", "overview", or "introduction".`,
+        `- Return only the title text — no quotes, no punctuation at the end.`,
+      ].join("\n");
+
+      try {
+        const raw = await generateText({
+          model: MODEL_FLASH,
+          parts: [{ text: titlePrompt }],
+          maxOutputTokens: 32,
+          temperature: 0.6,
+        });
+        title = raw.trim().replace(/^["'`]+|["'`]+$/g, "").trim() || src.title;
+      } catch {
+        title = src.title;
+      }
+
+      ctx.galaxyTitle = title;
+      updateGalaxyTitle(ctx.galaxyId, title);
+    }
+
     const description =
       themes.length > 0
         ? `A focused collection exploring ${themes.join(", ")}.`
-        : `A focused collection of ${n} source document${n === 1 ? "" : "s"}.`;
+        : `A focused collection of ${n} source document.`;
     ctx.solarSystems = [
       {
         id: randomUUID(),
@@ -465,6 +495,7 @@ export async function runExpandPlanetsStage(
         parts: [{ text: prompt }],
         temperature: 0.85,
         maxOutputTokens: planetOutputBudget,
+        thinkingBudget: 0, // prose writing — thinking adds latency, not quality
       });
 
       planet.body = canonicalizeGeneratedWikilinks(stripProseArtifacts(raw), {
@@ -547,6 +578,7 @@ export async function runExpandConceptsStage(
         parts: [{ text: prompt }],
         temperature: 0.85,
         maxOutputTokens: conceptOutputBudget,
+        thinkingBudget: 0, // prose writing — thinking adds latency, not quality
       });
 
       concept.body = canonicalizeGeneratedWikilinks(stripProseArtifacts(raw), {

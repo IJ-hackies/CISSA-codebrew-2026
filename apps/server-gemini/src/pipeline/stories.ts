@@ -260,6 +260,7 @@ export async function runWriteStoriesStage(
       jsonSchema: storyBodyJsonSchema,
       temperature: 0.95,
       maxOutputTokens: storyOutputBudget,
+      thinkingBudget: 0, // creative writing — thinking adds latency, not quality
     });
 
     const knownTitles = new Set(plannedPlanets.map((p) => p.title));
