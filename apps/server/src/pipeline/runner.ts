@@ -2,7 +2,9 @@
 //
 // ─── Execution model ──────────────────────────────────────────────────────
 //
-// All stages run sequentially in a single pipeline call — no background path.
+// Stage 0 (ingest) runs synchronously and the galaxy is returned to the
+// client immediately. Stages 1–2.5 run in the background — the client
+// polls GET /api/galaxy/:id to pick up progress as each stage completes.
 //
 //   0. Ingest/Chunk  — mint id, hash, chunk text into source units   (pure code)
 //   1. Structure     — Claude Code via proxy → knowledge + rels      (Claude)
@@ -18,6 +20,7 @@ import { runSkeletonStage } from "./skeleton";
 import { runWrapsStage } from "./wraps";
 import { runCoverageAudit } from "./coverage";
 import { destroySession } from "../lib/proxy-client";
+import { saveGalaxy } from "../db/store";
 
 export interface RunPipelineInput {
   chapterId: ChapterId;
@@ -28,6 +31,84 @@ export interface RunPipelineInput {
   parts?: SourcePart[];
   /** PDF page images for vision-based content extraction in Claude Code. */
   pageImages?: { page: number; png: Buffer }[];
+}
+
+/**
+ * Run Stage 0 only: chunk text into source units and mint a Galaxy blob.
+ * Returns immediately — use `runBackgroundStages` to continue the pipeline.
+ */
+export function runIngestStage(input: RunPipelineInput): Galaxy {
+  const { galaxy } = runChunker({
+    chapterId: input.chapterId,
+    kind: input.kind,
+    filename: input.filename,
+    text: input.text,
+    title: input.title,
+    parts: input.parts,
+  });
+  return galaxy;
+}
+
+/**
+ * Persist the galaxy so the polling client sees "running" status
+ * immediately after a stage begins (not just after it completes).
+ */
+function persistQuietly(galaxy: Galaxy, label: string): void {
+  try {
+    saveGalaxy(galaxy);
+    console.log(`[runner] persisted: ${label}`);
+  } catch (err) {
+    console.error(`[runner] failed to persist ${label}:`, err);
+  }
+}
+
+/**
+ * Run stages 1–2.5 in the background. Persists after each stage starts
+ * AND completes so the polling client sees real-time status. Errors are
+ * caught per-stage and recorded on the galaxy blob via `stageError`.
+ */
+export async function runBackgroundStages(
+  galaxy: Galaxy,
+  pageImages?: { page: number; png: Buffer }[],
+  callbacks?: {
+    onStageComplete?: (galaxy: Galaxy, stage: string) => void | Promise<void>;
+  },
+): Promise<void> {
+  try {
+    // Stage 1: structure. stageStart is called inside runSkeletonStage —
+    // persist immediately after it starts so the client sees "running".
+    // We do this by saving on a microtask after the stage function begins.
+    const skeletonPromise = runSkeletonStage(galaxy, pageImages);
+    // stageStart was called synchronously at the top of runSkeletonStage
+    persistQuietly(galaxy, "structure started");
+
+    const skeletonResult = await skeletonPromise;
+    await callbacks?.onStageComplete?.(galaxy, "structure");
+
+    // Stage 2: wraps
+    const wrapsPromise = runWrapsStage(galaxy, skeletonResult.dispatchPlan);
+    persistQuietly(galaxy, "wraps started");
+
+    await wrapsPromise;
+    await callbacks?.onStageComplete?.(galaxy, "wraps");
+
+    // Stage 2.5: coverage
+    const coveragePromise = runCoverageAudit(galaxy);
+    persistQuietly(galaxy, "coverage started");
+
+    await coveragePromise;
+    await callbacks?.onStageComplete?.(galaxy, "coverage");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[runner] background pipeline failed: ${message}`);
+    // Stage-level errors are already recorded by individual stage functions.
+    // Persist the error state so the client can display it.
+    persistQuietly(galaxy, "error state");
+  } finally {
+    destroySession(galaxy.meta.id).catch((err) => {
+      console.warn(`[runner] workspace cleanup failed: ${err}`);
+    });
+  }
 }
 
 /**
@@ -43,36 +124,10 @@ export async function runPipeline(
     onStageComplete?: (galaxy: Galaxy, stage: string) => void | Promise<void>;
   },
 ): Promise<Galaxy> {
-  // Stage 0: chunk text into source units + mint blob.
-  const { galaxy } = runChunker({
-    chapterId: input.chapterId,
-    kind: input.kind,
-    filename: input.filename,
-    text: input.text,
-    title: input.title,
-    parts: input.parts,
-  });
+  const galaxy = runIngestStage(input);
   await callbacks?.onStageComplete?.(galaxy, "ingest");
 
-  try {
-    // Stage 1: skeleton via proxy (Claude Code).
-    // Returns knowledge + relationships + dispatch plan for Stage 2.
-    const skeletonResult = await runSkeletonStage(galaxy, input.pageImages);
-    await callbacks?.onStageComplete?.(galaxy, "structure");
-
-    // Stage 2: wraps (parallel per-node Claude agents via proxy).
-    await runWrapsStage(galaxy, skeletonResult.dispatchPlan);
-    await callbacks?.onStageComplete?.(galaxy, "wraps");
-
-    // Stage 2.5: coverage audit (unit-level + word-level + gap audit).
-    await runCoverageAudit(galaxy);
-    await callbacks?.onStageComplete?.(galaxy, "coverage");
-  } finally {
-    // Clean up proxy workspace — best-effort, don't fail the pipeline.
-    destroySession(galaxy.meta.id).catch((err) => {
-      console.warn(`[runner] workspace cleanup failed: ${err}`);
-    });
-  }
+  await runBackgroundStages(galaxy, input.pageImages, callbacks);
 
   return galaxy;
 }

@@ -22,7 +22,15 @@
     <Transition name="slide-down">
       <div v-if="pipelineRunning" class="pipeline-banner">
         <span class="pipeline-dot" />
-        Building your galaxy…
+        {{ pipelineStageLabel }}
+      </div>
+    </Transition>
+
+    <!-- Pipeline error banner -->
+    <Transition name="slide-down">
+      <div v-if="pipelineError" class="pipeline-banner pipeline-error">
+        <span class="pipeline-dot error" />
+        Pipeline failed at {{ pipelineError.stage }}: {{ pipelineError.message }}
       </div>
     </Transition>
 
@@ -106,9 +114,41 @@ const entryCount     = computed(() => galaxy.value?.knowledge?.entries.length ??
 const pipelineRunning = computed(() => {
   const p = galaxy.value?.pipeline
   if (!p) return false
-  return ['ingest', 'structure', 'wraps', 'coverage'].some(
-    (k) => (p as any)[k]?.status === 'running',
+  // Don't show "building" if a stage errored — show error instead.
+  const hasError = ['ingest', 'structure', 'wraps', 'coverage'].some(
+    (k) => (p as any)[k]?.status === 'error',
   )
+  if (hasError) return false
+  return ['ingest', 'structure', 'wraps', 'coverage'].some(
+    (k) => {
+      const s = (p as any)[k]?.status
+      return s === 'running' || s === 'pending'
+    },
+  )
+})
+const pipelineStageLabel = computed(() => {
+  const p = galaxy.value?.pipeline
+  if (!p) return 'Building your galaxy…'
+  const labels: Record<string, string> = {
+    ingest: 'Reading your memories…',
+    structure: 'Discovering connections…',
+    wraps: 'Wrapping each memory…',
+    coverage: 'Final checks…',
+  }
+  for (const k of ['coverage', 'wraps', 'structure', 'ingest']) {
+    const s = (p as any)[k]?.status
+    if (s === 'running') return labels[k]
+  }
+  return 'Building your galaxy…'
+})
+const pipelineError = computed(() => {
+  const p = galaxy.value?.pipeline
+  if (!p) return null
+  for (const k of ['ingest', 'structure', 'wraps', 'coverage']) {
+    const stage = (p as any)[k]
+    if (stage?.status === 'error') return { stage: k, message: stage.error }
+  }
+  return null
 })
 
 // ── Three.js refs ─────────────────────────────────────────────────────────────
@@ -118,6 +158,188 @@ const edgeObjects: THREE.Points[] = []
 let raycaster: THREE.Raycaster
 let mouse: THREE.Vector2
 let clickable: THREE.Mesh[] = []
+
+// ── Pipeline particle burst system ───────────────────────────────────────────
+// Cosmic formation effect: ambient swirling particles while building,
+// big bursts when stages complete.
+
+const BURST_COLORS = [
+  new THREE.Color('#ffb547'), // warm gold
+  new THREE.Color('#ffd180'), // light gold
+  new THREE.Color('#7c9ef8'), // cool blue
+  new THREE.Color('#a8c4ff'), // light blue
+  new THREE.Color('#e8d4ff'), // lavender
+]
+const MAX_PARTICLES = 600
+
+interface Particle {
+  pos: THREE.Vector3
+  vel: THREE.Vector3
+  life: number      // 0→1 over lifetime
+  maxLife: number    // seconds
+  size: number
+  colorIdx: number
+}
+
+const particles: Particle[] = []
+let burstGeo: THREE.BufferGeometry | null = null
+let burstPoints: THREE.Points | null = null
+let burstPositions: Float32Array | null = null
+let burstColors: Float32Array | null = null
+let burstSizes: Float32Array | null = null
+let lastAmbientSpawn = 0
+let prevKnowledgeCount = 0
+let prevWrapsCount = 0
+
+function initBurstSystem() {
+  if (!sceneCtx) return
+  burstPositions = new Float32Array(MAX_PARTICLES * 3)
+  burstColors = new Float32Array(MAX_PARTICLES * 4)
+  burstSizes = new Float32Array(MAX_PARTICLES)
+
+  burstGeo = new THREE.BufferGeometry()
+  burstGeo.setAttribute('position', new THREE.BufferAttribute(burstPositions, 3))
+  burstGeo.setAttribute('color', new THREE.BufferAttribute(burstColors, 4))
+  burstGeo.setAttribute('size', new THREE.BufferAttribute(burstSizes, 1))
+
+  const mat = new THREE.PointsMaterial({
+    size: 1.5,
+    transparent: true,
+    opacity: 1,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    sizeAttenuation: true,
+    vertexColors: true,
+  })
+  burstPoints = new THREE.Points(burstGeo, mat)
+  sceneCtx.scene.add(burstPoints)
+}
+
+function spawnBurst(count: number, origin: THREE.Vector3, speed: number, spread: number) {
+  for (let i = 0; i < count && particles.length < MAX_PARTICLES; i++) {
+    // Random direction on a sphere
+    const theta = Math.random() * Math.PI * 2
+    const phi = Math.acos(2 * Math.random() - 1)
+    const s = speed * (0.4 + Math.random() * 0.6)
+    const vel = new THREE.Vector3(
+      Math.sin(phi) * Math.cos(theta) * s,
+      Math.sin(phi) * Math.sin(theta) * s,
+      Math.cos(phi) * s,
+    )
+    particles.push({
+      pos: origin.clone().add(new THREE.Vector3(
+        (Math.random() - 0.5) * spread,
+        (Math.random() - 0.5) * spread,
+        (Math.random() - 0.5) * spread,
+      )),
+      vel,
+      life: 0,
+      maxLife: 1.2 + Math.random() * 2.0,
+      size: 0.4 + Math.random() * 1.8,
+      colorIdx: Math.floor(Math.random() * BURST_COLORS.length),
+    })
+  }
+}
+
+function updateBurstSystem(dt: number, elapsed: number) {
+  if (!burstPositions || !burstColors || !burstSizes || !burstGeo) return
+
+  // Ambient spawning while pipeline runs — gentle wisps from center
+  if (pipelineRunning.value) {
+    lastAmbientSpawn += dt
+    if (lastAmbientSpawn > 0.08) { // ~12 particles/sec
+      lastAmbientSpawn = 0
+      // Spiral outward from center with slight rotation
+      const angle = elapsed * 0.5 + Math.random() * Math.PI * 2
+      const r = 2 + Math.random() * 6
+      const origin = new THREE.Vector3(
+        Math.cos(angle) * r,
+        (Math.random() - 0.5) * 8,
+        Math.sin(angle) * r,
+      )
+      spawnBurst(2, origin, 4 + Math.random() * 8, 3)
+    }
+  }
+
+  // Update existing particles
+  let alive = 0
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i]
+    p.life += dt / p.maxLife
+    if (p.life >= 1) continue
+
+    // Physics: outward drift + gentle drag
+    p.pos.addScaledVector(p.vel, dt)
+    p.vel.multiplyScalar(0.97) // drag
+
+    // Envelope: quick fade in, long fade out
+    const t = p.life
+    const alpha = t < 0.1 ? t / 0.1 : Math.max(0, 1 - (t - 0.1) / 0.9)
+    const finalAlpha = alpha * 0.7
+
+    const c = BURST_COLORS[p.colorIdx]
+    const idx = alive
+
+    burstPositions[idx * 3]     = p.pos.x
+    burstPositions[idx * 3 + 1] = p.pos.y
+    burstPositions[idx * 3 + 2] = p.pos.z
+    burstColors[idx * 4]     = c.r
+    burstColors[idx * 4 + 1] = c.g
+    burstColors[idx * 4 + 2] = c.b
+    burstColors[idx * 4 + 3] = finalAlpha
+    burstSizes[idx] = p.size * (1 + t * 0.5) // grow slightly as they age
+
+    // Compact: move alive particle to front
+    if (i !== alive) particles[alive] = p
+    alive++
+  }
+  particles.length = alive
+
+  // Zero out unused slots
+  for (let i = alive; i < MAX_PARTICLES; i++) {
+    burstPositions[i * 3] = 0
+    burstPositions[i * 3 + 1] = 0
+    burstPositions[i * 3 + 2] = 0
+    burstColors[i * 4 + 3] = 0
+    burstSizes[i] = 0
+  }
+
+  burstGeo.attributes.position.needsUpdate = true
+  burstGeo.attributes.color.needsUpdate = true
+  burstGeo.attributes.size.needsUpdate = true
+  burstGeo.setDrawRange(0, Math.max(alive, 1))
+}
+
+/** Fire a celebration burst when new data arrives from the pipeline. */
+function checkForStageBursts() {
+  const k = galaxy.value?.knowledge
+  const w = galaxy.value?.wraps
+  const clusterN = k?.clusters.length ?? 0
+  const wrapN = w ? Object.keys(w).length : 0
+
+  if (clusterN > prevKnowledgeCount && prevKnowledgeCount === 0) {
+    // Structure stage just completed — big burst from center
+    spawnBurst(120, new THREE.Vector3(0, 0, 0), 25, 5)
+    // Also burst from each new node position
+    nodeObjects.forEach((mesh) => {
+      spawnBurst(30, mesh.position.clone(), 12, 2)
+    })
+  } else if (clusterN > prevKnowledgeCount) {
+    spawnBurst(60, new THREE.Vector3(0, 0, 0), 18, 4)
+  }
+
+  if (wrapN > prevWrapsCount) {
+    // Wraps arriving — burst from the nodes that got wraps
+    const diff = wrapN - prevWrapsCount
+    const burstPer = Math.min(25, Math.ceil(80 / diff))
+    nodeObjects.forEach((mesh) => {
+      spawnBurst(burstPer, mesh.position.clone(), 10, 1.5)
+    })
+  }
+
+  prevKnowledgeCount = clusterN
+  prevWrapsCount = wrapN
+}
 
 // ── Build force graph ─────────────────────────────────────────────────────────
 function buildGraph() {
@@ -240,7 +462,14 @@ function buildGraph() {
 }
 
 // ── Per-frame: particles + pulse + label projection ───────────────────────────
+let lastFrameTime = 0
 function onFrame(elapsed: number) {
+  const dt = Math.min(elapsed - lastFrameTime, 0.1) // cap delta to avoid huge jumps
+  lastFrameTime = elapsed
+
+  // Pipeline burst particles
+  updateBurstSystem(dt, elapsed)
+
   // Particle streams
   edgeObjects.forEach((pts) => {
     const { srcPos, tgtPos, positions, phases, particleCount } = pts.userData
@@ -355,7 +584,12 @@ onMounted(async () => {
 
   const id = route.params.id as string
   if (!galaxy.value || galaxy.value.meta.id !== id) {
-    try { await loadGalaxy(id) } catch { setGalaxy(MOCK_GALAXY) }
+    try {
+      await loadGalaxy(id)
+    } catch (err) {
+      console.error('[galaxy-view] failed to load galaxy:', err)
+      // Don't silently fall back to mock — let the user see the real state.
+    }
   }
   loading.value = false
 
@@ -378,6 +612,7 @@ onMounted(async () => {
     originalRender()
   }
 
+  initBurstSystem()
   buildGraph()
 
   // Fade in — veil starts opaque, dissolves away
@@ -390,10 +625,22 @@ onMounted(async () => {
 onUnmounted(() => {
   containerRef.value?.removeEventListener('mousemove', onMouseMove)
   containerRef.value?.removeEventListener('click', onClick)
+  if (burstPoints) {
+    sceneCtx?.scene.remove(burstPoints)
+    burstGeo?.dispose()
+    ;(burstPoints.material as THREE.Material).dispose()
+  }
+  particles.length = 0
   sceneCtx?.dispose()
 })
 
-watch(() => galaxy.value?.knowledge, (k) => { if (k && sceneCtx) buildGraph() })
+watch(() => galaxy.value?.knowledge, (k) => {
+  if (k && sceneCtx) {
+    checkForStageBursts()
+    buildGraph()
+  }
+})
+watch(() => galaxy.value?.wraps, () => { checkForStageBursts() }, { deep: true })
 </script>
 
 <style scoped>
@@ -450,16 +697,24 @@ watch(() => galaxy.value?.knowledge, (k) => { if (k && sceneCtx) buildGraph() })
 /* Pipeline banner */
 .pipeline-banner {
   position: absolute; bottom: 28px; left: 50%; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 8px; padding: 8px 18px;
-  background: rgba(7,10,20,0.7); border: 1px solid rgba(124,158,248,0.15);
-  border-radius: 100px; font-family: 'Space Grotesk', sans-serif; font-size: 12px; color: #6f7989;
-  backdrop-filter: blur(12px); pointer-events: none; z-index: 10;
+  display: flex; align-items: center; gap: 10px; padding: 10px 22px;
+  background: rgba(7,10,20,0.75); border: 1px solid rgba(124,158,248,0.18);
+  border-radius: 100px; font-family: 'Space Grotesk', sans-serif; font-size: 12px; color: #8a9ab8;
+  letter-spacing: 0.04em;
+  backdrop-filter: blur(16px); pointer-events: none; z-index: 10;
+  box-shadow: 0 0 30px rgba(124, 158, 248, 0.06), 0 0 60px rgba(255, 181, 71, 0.03);
 }
 .pipeline-dot {
-  width: 6px; height: 6px; border-radius: 50%; background: #7c9ef8;
-  animation: dot-blink 1.4s ease-in-out infinite;
+  width: 7px; height: 7px; border-radius: 50%; background: #7c9ef8;
+  box-shadow: 0 0 8px rgba(124, 158, 248, 0.6);
+  animation: dot-breathe 2s ease-in-out infinite;
 }
-@keyframes dot-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+@keyframes dot-breathe {
+  0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 8px rgba(124, 158, 248, 0.6); }
+  50%      { opacity: 0.5; transform: scale(0.8); box-shadow: 0 0 4px rgba(124, 158, 248, 0.3); }
+}
+.pipeline-error { border-color: rgba(248, 124, 124, 0.2); }
+.pipeline-error .pipeline-dot.error { background: #f87c7c; animation: none; }
 
 /* HTML node labels — always visible, projected from 3D */
 .node-label {

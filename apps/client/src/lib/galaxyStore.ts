@@ -21,15 +21,16 @@ const POLL_INTERVAL_MS = 5000
 
 function shouldPoll(g: Galaxy): boolean {
   const p = g.pipeline
-  return (
-    p.ingest.status === 'running' ||
-    p.structure.status === 'running' ||
-    p.wraps.status === 'running' ||
-    p.coverage.status === 'running' ||
-    (p.ingest.status === 'complete' && p.structure.status === 'pending') ||
-    (p.structure.status === 'complete' && p.wraps.status === 'pending') ||
-    (p.wraps.status === 'complete' && p.coverage.status === 'pending')
+  // Stop polling if any stage errored — the pipeline won't continue.
+  const hasError = ['ingest', 'structure', 'wraps', 'coverage'].some(
+    (k) => (p as any)[k]?.status === 'error',
   )
+  if (hasError) return false
+  // Poll while any stage is still running or pending (not yet started).
+  return ['ingest', 'structure', 'wraps', 'coverage'].some((k) => {
+    const s = (p as any)[k]?.status
+    return s === 'running' || s === 'pending'
+  })
 }
 
 function startPolling(id: string) {

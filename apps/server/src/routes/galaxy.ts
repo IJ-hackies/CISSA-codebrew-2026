@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { sampleGalaxy } from "../fixtures/sample-galaxy";
 import { loadGalaxy, saveGalaxy } from "../db/store";
-import { runPipeline, sanitizeChapterId } from "../pipeline/runner";
+import { runIngestStage, runBackgroundStages, sanitizeChapterId } from "../pipeline/runner";
 import { createHash } from "node:crypto";
 import { extractFiles, UnsupportedFormatError } from "../pipeline/parsing/extract";
 import type { SourceKind, SourcePart } from "@scholarsystem/shared";
@@ -187,30 +187,33 @@ galaxyRoutes.post("/create", async (c) => {
   try {
     const chapterId = sanitizeChapterId(resolved.title);
 
-    const galaxy = await runPipeline(
-      {
-        chapterId,
-        kind: resolved.kind,
-        filename: resolved.filename,
-        text: resolved.text,
-        title: resolved.title,
-        parts: resolved.parts,
-        pageImages: resolved.pageImages,
-      },
-      {
-        // Persist after each stage completes so progress survives restarts.
-        onStageComplete: (g, stage) => {
-          try {
-            saveGalaxy(g);
-            console.log(`[galaxy/create] persisted after stage: ${stage}`);
-          } catch (err) {
-            console.error(`[galaxy/create] failed to persist after ${stage}:`, err);
-          }
-        },
-      },
-    );
+    // Stage 0: ingest + chunk (instant, pure code — no Claude calls).
+    const galaxy = runIngestStage({
+      chapterId,
+      kind: resolved.kind,
+      filename: resolved.filename,
+      text: resolved.text,
+      title: resolved.title,
+      parts: resolved.parts,
+    });
     saveGalaxy(galaxy);
+    console.log(`[galaxy/create] persisted after stage: ingest (${galaxy.meta.id})`);
 
+    // Stages 1–2.5 run in the background. The client polls GET /:id
+    // to pick up progress as each stage completes and persists.
+    const stageCallbacks = {
+      onStageComplete: (g: typeof galaxy, stage: string) => {
+        try {
+          saveGalaxy(g);
+          console.log(`[galaxy/create] persisted after stage: ${stage}`);
+        } catch (err) {
+          console.error(`[galaxy/create] failed to persist after ${stage}:`, err);
+        }
+      },
+    };
+    runBackgroundStages(galaxy, resolved.pageImages, stageCallbacks);
+
+    // Return immediately with the Stage 0 blob.
     return c.json(galaxy, 201);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

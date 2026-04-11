@@ -34,5 +34,5 @@ export const config = {
    *   "sonnet" — default for production pipeline stages
    *   "opus"   — only for Stage 6 heavy concepts
    */
-  defaultModel: process.env.CLAUDE_MODEL ?? "sonnet",
+  defaultModel: process.env.CLAUDE_MODEL ?? "opus",
 } as const;

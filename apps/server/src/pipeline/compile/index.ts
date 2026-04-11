@@ -98,6 +98,17 @@ export function compileStructure(
     const d = note.data;
     const type = d.type as string;
 
+    // Sanitize all slug-shaped fields before Zod validation.
+    // Claude occasionally generates IDs with uppercase, underscores,
+    // leading digits after hyphens, etc. Fix them here rather than
+    // failing the entire stage.
+    if (d.id) d.id = sanitizeSlug(d.id as string);
+    if (d.cluster) d.cluster = sanitizeSlug(d.cluster as string);
+    if (d.group) d.group = sanitizeSlug(d.group as string);
+    if (d.sourceRefs) {
+      d.sourceRefs = asStringArray(d.sourceRefs).map(sanitizeSlug);
+    }
+
     switch (type) {
       case "cluster": {
         const c = Cluster.parse({
@@ -163,8 +174,8 @@ export function compileStructure(
         continue;
     }
 
-    // Extract wikilinks from body → relationship edges.
-    const links = extractWikilinks(note.body);
+    // Extract wikilinks from body → relationship edges (sanitize targets too).
+    const links = extractWikilinks(note.body).map(sanitizeSlug);
     const noteId = d.id as string;
     const sourceRefs = asStringArray(d.sourceRefs);
     const chapter = d.chapter as string;
@@ -465,6 +476,28 @@ function pickStageFiles(
     }
   }
   return notes;
+}
+
+/**
+ * Sanitize a Claude-generated ID into a valid Slug.
+ * Handles: uppercase, underscores, leading digits after hyphens,
+ * spaces, and other non-alphanumeric chars.
+ */
+function sanitizeSlug(raw: string): string {
+  let s = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-") // non-alnum → hyphen
+    .replace(/-+/g, "-")          // deduplicate hyphens
+    .replace(/^-|-$/g, "");       // trim edge hyphens
+
+  // Ensure each segment after a hyphen starts with a letter.
+  // e.g. "w1-1st-day" → "w1-s1st-day" (prefix digit segments with 's')
+  s = s.replace(/-(\d)/g, "-s$1");
+
+  // Ensure the slug starts with a letter.
+  if (s && !/^[a-z]/.test(s)) s = "s" + s;
+
+  return s || "x";
 }
 
 export function asStringArray(val: unknown): string[] {
