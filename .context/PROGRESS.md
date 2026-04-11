@@ -26,7 +26,7 @@ Status: **complete** (carries over from v3)
 - [x] Background polish — drifting/breathing nebula blobs, dot grid overlay, hero glow, noise texture, edge vignette
 
 ### Frontend — 3D Galaxy
-Status: **partially carries over** — Three.js scene, force-graph, camera system carry over. Data model integration needs rewrite for v4 entity types.
+Status: **linked to live backend** — Three.js scene, force-graph, camera system, and the `apps/server-gemini/` API contract are wired together. Remaining work is feature/data polish, not backend linkage.
 
 - [x] Three.js scene manager (useThreeScene composable — bloom, OrbitControls, starfield, resize)
 - [x] 3D force-directed graph — galaxy view (GalaxyView.vue, d3-force-3d)
@@ -45,21 +45,22 @@ Status: **partially carries over** — Three.js scene, force-graph, camera syste
 - [x] Wikilink rendering in markdown bodies — `[[(Type) Name]]` resolved via `wikiLinkIndex` in PlanetDrawer/ConceptDrawer/StoryReader, click handlers route to flyToPlanet / openConcept / openStory
 - [x] Cross-system planet traversal — story "Visit planet" button traverses solar→galaxy→solar via query-param state passing, story state preserved as a "Resume" affordance on the trigger
 - [x] Deep-space ambience — CSS radial gradient backgrounds, viewport-scaled hero stars + noise-textured nebula billboards behind the starfield, tight bloom thresholds so halos don't bubble around particle systems
-- [ ] Rewrite data layer for v4 entity types (SolarSystem/Planet/Concept instead of Cluster/Group/Entry)
+- [x] Link frontend data layer to the live `apps/server-gemini/` `/api/galaxy/*` contract
 
 ### Backend — Pipeline
-Status: **needs rewrite for v4**
+Status: **active via `apps/server-gemini/`**
 
-The v3 pipeline code exists but operates on the old data model (JSON blob, clusters/groups/entries, wraps). For v4:
-- [ ] Workspace parser — read `Mesh/` directory, parse frontmatter, build WikiLinkIndex, assemble GalaxyData
-- [ ] API route — serve GalaxyData JSON from parsed workspace
-- [ ] Pipeline orchestration — invoke Claude Code sessions for each stage (Ingest/Structure/Stories)
-- [ ] Media serving — serve files from `Media/Media/`
+The live backend serving the frontend is now `apps/server-gemini/`. It owns the upload flow, staged generation pipeline, markdown mesh, media serving, and cached `GalaxyData` envelope returned from `/api/galaxy/:id`.
 
-Existing infrastructure that carries over:
-- [x] Proxy (apps/proxy/) — Claude Code worker pool, per-galaxy workspaces
-- [x] File extractors (pipeline/parsing/extract/) — PDF, text, etc.
-- [x] Proxy client (lib/proxy-client.ts) — fan-out infra
+- [x] Frontend linked to `apps/server-gemini/` on port `8889`
+- [x] API route — frontend consumes `/api/galaxy/create` + `/api/galaxy/:id`
+- [x] Workspace parser — backend returns parsed `GalaxyData` from the mesh workspace
+- [x] Media serving — image/file references resolve through `/api/galaxy/:id/media/:filename`
+- [ ] Remove legacy `apps/server/` + `apps/proxy/` stack from the repo after docs/scripts cleanup
+
+Legacy infrastructure still present in the repo but no longer on the active path:
+- [x] `apps/server/` — superseded
+- [x] `apps/proxy/` — superseded
 
 ### Shared Types
 Status: **needs rewrite for v4**
@@ -72,6 +73,8 @@ Status: **needs rewrite for v4**
 ## Changelog
 
 _Newest at top._
+
+- 2026-04-12 — **Frontend/backend linkage finalized on `server-gemini`** — active client integration now targets `apps/server-gemini/` through the existing Vite `/api` proxy to port `8889`; `.context` docs updated to treat `server-gemini` as the live backend and the old `apps/server/` + `apps/proxy/` stack as legacy pending deletion.
 
 - 2026-04-11 — **Space rift tuning, edge thickness, browser-back animation** (`feat/frontend-finalisation`) — (1) **Space rift visual fix**: initial rift was too bright and chunky (looked like a broad glowing beam); filament sigmas reduced `11 → 3px` (main spine), secondaries `6–7 → 2px`, so each filament is a tight crack not a wide band; sprite opacity reduced `0.80 → 0.22` (primary) and `0.40 → 0.10` (secondary halo); world-space scale reduced `520×130 → 320×80` so the rift subtends ~22°×5° of sky instead of ~68°×19°; added a very-wide low-brightness halo pass (sigma=22, brightness=0.12) behind the tight filaments for soft depth without blowing out. (2) **Galaxy particle-stream edge thickness**: inter-system dotted stream particle `size` bumped `0.55 → 0.85` for better visibility. (3) **Browser back button animation**: `SolarSystemView` now registers an `onBeforeRouteLeave` guard that intercepts the browser's native back button — cancels the nav, plays the standard veil-fade + warp-in animation, then re-navigates with a `bypassLeaveGuard` flag so the guard doesn't fire twice; programmatic exits (`navigateBack`, `travelToOtherSystemPlanet`) also set the flag before their `router.push` to prevent double animation.
 

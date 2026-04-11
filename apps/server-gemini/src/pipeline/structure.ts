@@ -14,6 +14,7 @@ import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { generateJson, generateText, MODEL_FLASH } from "./gemini";
 import { mapViaLimiter, mapViaLimiterTolerant, type Limiter } from "../lib/concurrency";
+import { canonicalizeGeneratedWikilinks } from "../lib/wikilinks";
 import {
   writeSolarSystem,
   writePlanet,
@@ -448,7 +449,10 @@ export async function runExpandPlanetsStage(
         maxOutputTokens: planetOutputBudget,
       });
 
-      planet.body = stripProseArtifacts(raw);
+      planet.body = canonicalizeGeneratedWikilinks(stripProseArtifacts(raw), {
+        planets: planetTitles,
+        concepts: conceptTitles,
+      });
 
       writePlanet(ctx.galaxyId, {
         id: planet.id,
@@ -515,7 +519,7 @@ export async function runExpandConceptsStage(
         ``,
         `TARGET LENGTH: ${budget.conceptBodyWords.min}-${budget.conceptBodyWords.max} words. Match it to the source material — do not pad.`,
         ``,
-        `Unlike a planet, a concept can be more thematic — explore why it matters, how it shows up across different planets, what makes it distinctive. Inline \`[[wikilinks]]\` using only titles from the lists above. No top-level heading.`,
+        `Unlike a planet, a concept can be more thematic — explore why it matters, how it shows up across different planets, what makes it distinctive. Inline \`[[(Planet) Other Title]]\` and \`[[(Concept) Name]]\` wikilinks using only titles from the lists above. No top-level heading.`,
         ``,
         `Return ONLY the markdown body. No JSON wrapper, no fenced code block, no preamble — just the prose.`,
       ].join("\n");
@@ -527,7 +531,10 @@ export async function runExpandConceptsStage(
         maxOutputTokens: conceptOutputBudget,
       });
 
-      concept.body = stripProseArtifacts(raw);
+      concept.body = canonicalizeGeneratedWikilinks(stripProseArtifacts(raw), {
+        planets: planetTitles,
+        concepts: conceptTitles,
+      });
 
       writeConcept(ctx.galaxyId, {
         id: concept.id,

@@ -26,9 +26,56 @@ export type {
   StoryScene,
 } from '@scholarsystem/shared'
 
-/** Fetch GalaxyData from the mesh parser API. */
-export async function fetchMeshData(id: string): Promise<GalaxyData> {
-  const res = await fetch(`/api/mesh/${encodeURIComponent(id)}`)
+export type GalaxyJobStatus =
+  | 'queued'
+  | 'ingest'
+  | 'cluster'
+  | 'outline'
+  | 'expand'
+  | 'stories'
+  | 'complete'
+  | 'error'
+
+export interface GalaxyEnvelope {
+  id: string
+  title: string
+  status: GalaxyJobStatus
+  stageDetail: string
+  error: string | null
+  createdAt: number
+  updatedAt: number
+  galaxy: GalaxyData
+}
+
+export interface CreateGalaxyInput {
+  text?: string
+  title?: string
+  files?: File[]
+  filename?: string | null
+}
+
+export async function createGalaxy(input: CreateGalaxyInput): Promise<GalaxyEnvelope> {
+  const hasFiles = (input.files?.length ?? 0) > 0
+  let res: Response
+
+  if (hasFiles) {
+    const form = new FormData()
+    for (const f of input.files!) form.append('file', f, f.name)
+    if (input.title) form.append('title', input.title)
+    if (input.text) form.append('text', input.text)
+    res = await fetch('/api/galaxy/create', { method: 'POST', body: form })
+  } else {
+    res = await fetch('/api/galaxy/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: input.text,
+        title: input.title,
+        filename: input.filename,
+      }),
+    })
+  }
+
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
     try {
@@ -39,7 +86,29 @@ export async function fetchMeshData(id: string): Promise<GalaxyData> {
     }
     throw new Error(detail)
   }
-  return (await res.json()) as GalaxyData
+
+  return (await res.json()) as GalaxyEnvelope
+}
+
+export async function fetchGalaxyEnvelope(id: string): Promise<GalaxyEnvelope> {
+  const res = await fetch(`/api/galaxy/${encodeURIComponent(id)}`)
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`
+    try {
+      const err = (await res.json()) as { error?: string; message?: string }
+      detail = err.message ?? err.error ?? detail
+    } catch {
+      // non-JSON error body
+    }
+    throw new Error(detail)
+  }
+  return (await res.json()) as GalaxyEnvelope
+}
+
+/** Fetch GalaxyData from the mesh parser API. */
+export async function fetchMeshData(id: string): Promise<GalaxyData> {
+  const envelope = await fetchGalaxyEnvelope(id)
+  return envelope.galaxy
 }
 
 /**

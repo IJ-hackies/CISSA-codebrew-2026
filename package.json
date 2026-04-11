@@ -6,15 +6,17 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "bun run dev:client & bun run dev:server & wait",
-    "dev:client": "cd apps/client && bun run dev",
-    "dev:server": "cd apps/server && bun run dev",
-    "dev:proxy": "cd apps/proxy && bun run dev",
+    "dev": "bun run --filter=scholarsystem-client --filter=scholarsystem-server-gemini --parallel dev",
+    "dev:client": "bun run --cwd apps/client dev",
+    "dev:server": "bun run --cwd apps/server dev",
+    "dev:server-gemini": "bun run --cwd apps/server-gemini dev",
+    "dev:proxy": "bun run --cwd apps/proxy dev",
     "build": "bun run build:client",
-    "build:client": "cd apps/client && bun run build",
-    "start:server": "cd apps/server && bun run start",
-    "start:proxy": "cd apps/proxy && bun run start",
-    "lint": "cd apps/client && bun run lint",
-    "format": "cd apps/client && bun run format"
+    "build:client": "bun run --cwd apps/client build",
+    "start:server": "bun run --cwd apps/server start",
+    "start:server-gemini": "bun run --cwd apps/server-gemini start",
+    "start:proxy": "bun run --cwd apps/proxy start",
+    "lint": "bun run --cwd apps/client lint",
+    "format": "bun run --cwd apps/client format"
   }
 }

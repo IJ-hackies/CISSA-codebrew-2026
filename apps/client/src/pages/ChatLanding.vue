@@ -13,13 +13,10 @@ import {
   listRecentGalaxies,
   type GalaxyEntry,
 } from '@/lib/recentGalaxies'
-import { createGalaxy } from '@/lib/api'
-import { useGalaxyStore } from '@/lib/galaxyStore'
-import type { Galaxy } from '@/lib/galaxyTypes'
+import { createGalaxy, fetchGalaxyEnvelope } from '@/lib/meshApi'
 
 const router = useRouter()
 const isMobile = useIsMobile()
-const { setGalaxy } = useGalaxyStore()
 useVisualViewport()
 
 const text = ref('')
@@ -170,6 +167,20 @@ const placeholderTitle = computed(() => {
 // unbounded in v1 (sync POST /api/galaxy/create); if it exceeds this, the
 // cruise just waits on the network promise.
 const MIN_CRUISE_MS = 2500
+const POLL_INTERVAL_MS = 2500
+
+async function waitForRenderableGalaxy(id: string) {
+  for (;;) {
+    const envelope = await fetchGalaxyEnvelope(id)
+    if (envelope.status === 'error') {
+      throw new Error(envelope.error ?? 'Galaxy generation failed')
+    }
+    if (Object.keys(envelope.galaxy.solarSystems).length > 0) {
+      return envelope
+    }
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+  }
+}
 
 async function handleSubmit() {
   if (launching.value) return
@@ -206,10 +217,12 @@ async function handleSubmit() {
     }
 
     // Wait for BOTH: the pipeline result and a minimum cruise feel.
-    const [galaxy] = await Promise.all([
+    const [created] = await Promise.all([
       pipelinePromise,
       new Promise((r) => setTimeout(r, MIN_CRUISE_MS)),
     ])
+
+    const galaxy = await waitForRenderableGalaxy(created.id)
 
     console.log('[chat-landing] pipeline returned galaxy:', galaxy)
 
@@ -225,15 +238,12 @@ async function handleSubmit() {
     if (galaxy) setGalaxy(galaxy as Galaxy)
 
     const entry: GalaxyEntry = {
-      uuid: galaxy?.meta?.id,
-      title: galaxy?.meta?.title,
+      uuid: galaxy.id,
+      title: galaxy.title,
       createdAt: Date.now(),
     }
-    console.log('[chat-landing] navigating to', `/galaxy/${entry.uuid}`)
     if (!entry.uuid) {
-      throw new Error(
-        `Backend returned galaxy without meta.id (got: ${JSON.stringify(galaxy?.meta)})`,
-      )
+      throw new Error('Backend returned galaxy without id')
     }
     addRecentGalaxy(entry)
     recents.value = listRecentGalaxies()

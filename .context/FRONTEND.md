@@ -1,6 +1,6 @@
 # Frontend Guide (v4)
 
-The data model has changed. The old v3 types (Cluster, Group, Entry, Wrap) are superseded. The frontend now consumes `GalaxyData` from the mesh parser API.
+The data model has changed. The old v3 types (Cluster, Group, Entry, Wrap) are superseded. The frontend now consumes `GalaxyData` from the live `apps/server-gemini/` API.
 
 ## Data Loading
 
@@ -9,10 +9,11 @@ Two ways to get `GalaxyData` — pick whichever fits your setup:
 ### Option 1: Server API
 
 ```
-GET /api/mesh/:id  →  GalaxyData JSON
+POST /api/galaxy/create  →  status envelope + initial empty galaxy
+GET /api/galaxy/:id      →  status envelope + GalaxyData JSON
 ```
 
-The server parses a workspace of markdown files and returns everything the frontend needs in a single response. No polling, no partial loads — one fetch, full data.
+The frontend is linked to `apps/server-gemini/` on port `8889` via the Vite dev proxy. The client creates a galaxy with `POST /api/galaxy/create`, then polls `GET /api/galaxy/:id` while the backend pipeline runs. Each response includes pipeline status plus the latest parsed `GalaxyData`.
 
 ### Option 2: Static fixture (no server needed)
 
@@ -268,12 +269,12 @@ When a planet drawer opens, animated dash lines fan out from that planet to each
 
 | v3 | v4 |
 |---|---|
-| `Galaxy` blob from SQLite | `GalaxyData` from mesh parser API |
+| `Galaxy` blob from SQLite | `GalaxyData` from `apps/server-gemini/` |
 | `Cluster` / `Group` / `Entry` | `SolarSystem` / `Planet` / `Concept` |
 | `Wrap` cards (headline, stats, mood) | Raw `markdown` prose |
 | `EntryKind` → mesh shape | Entity type (planet/concept) → visual |
 | `relationships.edges[]` | `planetConnections` / `conceptConnections` on entities |
 | No stories | `Story[]` — full narrative arcs |
-| `GET /api/galaxy/:id` | `GET /api/mesh/:id` |
+| old direct mesh fetch | `POST /api/galaxy/create` + poll `GET /api/galaxy/:id` |
 
 The chat landing page, Three.js renderer, camera system, and warp effects all carry over. The data layer needs rewiring.

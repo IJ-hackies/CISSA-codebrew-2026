@@ -33,6 +33,7 @@ import {
   type LlmPart,
 } from "./gemini";
 import type { InputBudget } from "./budget";
+import { canonicalizeGeneratedWikilinks } from "../lib/wikilinks";
 import { galaxyPaths } from "../workspace/layout";
 import {
   writeSource,
@@ -444,6 +445,9 @@ export async function runOneShotPipeline(
   const filterList = (titles: string[], allowed: Set<string>, self?: string) =>
     titles.filter((t) => t !== self && allowed.has(t));
 
+  const allPlanetTitles = [...planetTitles];
+  const allConceptTitles = [...conceptTitles];
+
   // Build minimal SourceCtx entries directly from the raw file metadata
   // — no LLM call, filename-derived title, snippet-as-body. Enough for
   // the parser to assemble a valid GalaxyData.
@@ -472,7 +476,10 @@ export async function runOneShotPipeline(
     oneLineHook: p.oneLineHook,
     sourceIds: sourceIdList,
     planetConnectionTitles: filterList(p.planetConnections, planetTitles, p.title),
-    body: p.body,
+    body: canonicalizeGeneratedWikilinks(p.body, {
+      planets: allPlanetTitles,
+      concepts: allConceptTitles,
+    }),
   }));
 
   const conceptCtxs: ConceptCtx[] = cleanConcepts.map((c) => ({
@@ -481,7 +488,10 @@ export async function runOneShotPipeline(
     oneLineHook: c.oneLineHook,
     planetConnectionTitles: filterList(c.planetConnections, planetTitles),
     conceptConnectionTitles: filterList(c.conceptConnections, conceptTitles, c.title),
-    body: c.body,
+    body: canonicalizeGeneratedWikilinks(c.body, {
+      planets: allPlanetTitles,
+      concepts: allConceptTitles,
+    }),
   }));
 
   const solarSystemCtx: SolarSystemCtx = {
@@ -510,9 +520,21 @@ export async function runOneShotPipeline(
     drivingConceptTitles: [],
     plannedPlanetTitles: cleanScenes.map((s) => s.planetTitle),
     arcOutline: "",
-    introduction: result.story.introduction,
-    scenes: cleanScenes,
-    conclusion: result.story.conclusion,
+    introduction: canonicalizeGeneratedWikilinks(result.story.introduction, {
+      planets: allPlanetTitles,
+      concepts: allConceptTitles,
+    }),
+    scenes: cleanScenes.map((scene) => ({
+      planetTitle: scene.planetTitle,
+      markdown: canonicalizeGeneratedWikilinks(scene.markdown, {
+        planets: allPlanetTitles,
+        concepts: allConceptTitles,
+      }),
+    })),
+    conclusion: canonicalizeGeneratedWikilinks(result.story.conclusion, {
+      planets: allPlanetTitles,
+      concepts: allConceptTitles,
+    }),
   };
 
   // Write every mesh file. Order doesn't matter for the parser — it
