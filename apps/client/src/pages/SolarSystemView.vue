@@ -2,33 +2,32 @@
   <div class="solar-view" ref="containerRef">
 
     <!-- Back button -->
-    <button class="back-btn" @click="navigateBack">
+    <button class="back-btn" @click="navigateBack" aria-label="Back to galaxy">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
         <path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
-      Galaxy
+      <span class="back-label">Galaxy</span>
     </button>
 
     <!-- System HUD -->
     <Transition name="fade">
-      <div v-if="solarSystem && !selectedPlanet" class="system-hud">
+      <div v-if="solarSystem && !rightStackOpen" class="system-hud">
         <div class="system-name">{{ solarSystem.title }}</div>
         <div class="system-meta">{{ solarSystem.planets.length }} planets · {{ solarSystem.concepts.length }} concepts</div>
       </div>
     </Transition>
 
-    <!-- HTML planet label overlays -->
-    <template v-if="!selectedPlanet">
-      <div
-        v-for="lbl in labelPositions"
-        :key="lbl.id"
-        class="planet-label"
-        :style="{ left: lbl.x + 'px', top: lbl.y + 'px', opacity: lbl.opacity, '--lc': lbl.color }"
-      >
-        {{ lbl.title }}
-        <span class="planet-dot" :class="{ visited: lbl.visited }" />
-      </div>
-    </template>
+    <!-- HTML planet label overlays (hide the one currently open in the drawer) -->
+    <div
+      v-for="lbl in labelPositions"
+      v-show="lbl.id !== currentRightPlanet?.id"
+      :key="lbl.id"
+      class="planet-label"
+      :style="{ left: lbl.x + 'px', top: lbl.y + 'px', opacity: lbl.opacity, '--lc': lbl.color }"
+    >
+      {{ lbl.title }}
+      <span class="planet-dot" :class="{ visited: lbl.visited }" />
+    </div>
 
     <!-- Flying soul (GSAP DOM element) -->
     <div ref="flyingSoulRef" class="flying-soul" style="display:none;">
@@ -45,54 +44,104 @@
     <!-- Nav veil -->
     <div class="nav-veil" ref="veilRef" />
 
-    <!-- Story reader (left) -->
+    <!-- Story reader (left rail) -->
     <StoryReader
       v-if="meshData"
       ref="storyReaderRef"
       :stories="meshData.stories"
       :galaxy-data="meshData"
+      :can-go-back="leftCanGoBack"
       @visit-planet="onStoryVisitPlanet"
       @highlight-concepts="onHighlightConcepts"
       @navigate-to-planet="onNavigateToPlanet"
       @open-concept="onOpenConcept"
+      @open-story="onOpenStory"
+      @back="onStoryBack"
+      @close="onStoryClose"
+      @opened="onStoryOpened"
     />
 
-    <!-- Planet drawer (right) -->
+    <!-- Right rail: planet drawer (shown when top of rightStack is a planet) -->
     <PlanetDrawer
-      :planet="selectedPlanet"
+      :planet="currentRightPlanet"
       :galaxy-data="meshData"
-      :planet-color="selectedPlanetColor"
-      @close="closeDrawer"
+      :planet-color="currentRightPlanetColor"
+      :can-go-back="rightCanGoBack"
+      @close="closeRight"
+      @back="popRight"
       @navigate-to-planet="onNavigateToPlanet"
       @open-concept="onOpenConcept"
       @open-story="onOpenStory"
     />
 
-    <!-- Concept HUD (bottom-right) -->
-    <ConceptHUD ref="conceptHudRef" />
+    <!-- Right rail: concept drawer (shown when top of rightStack is a concept) -->
+    <ConceptDrawer
+      :concept="currentRightConcept"
+      :galaxy-data="meshData"
+      :concept-color="currentRightConceptColor"
+      :can-go-back="rightCanGoBack"
+      @close="closeRight"
+      @back="popRight"
+      @navigate-to-planet="onNavigateToPlanet"
+      @open-concept="onOpenConcept"
+      @open-story="onOpenStory"
+    />
+
+    <!-- Concept HUD -->
+    <ConceptHUD
+      ref="conceptHudRef"
+      :galaxy-data="meshData"
+      :pill-mode="isMobile && (rightStackOpen || leftStackOpen)"
+      @open="onHudOpenConcept"
+    />
+
+    <!-- Onboarding tooltips (first galaxy only) -->
+    <template v-if="isFirstGalaxy">
+      <OnboardingTooltip
+        storage-key="ss.onboard.solarsystem"
+        text="Planets hold the knowledge. Souls float between them — click to collect."
+        position="bottom-center"
+      />
+      <OnboardingTooltip
+        storage-key="ss.onboard.stories"
+        text="Characters journey through this galaxy — read their stories."
+        position="top-left"
+        :offset="{ top: '72px', left: '22px' }"
+      />
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import * as THREE from 'three'
 import gsap from 'gsap'
 import { useThreeScene } from '@/composables/useThreeScene'
 import { useWarpEffect } from '@/composables/useWarpEffect'
 import { useMeshStore } from '@/lib/meshStore'
-import type { MeshPlanet, MeshSolarSystem } from '@/lib/meshApi'
+import type { MeshSolarSystem } from '@/lib/meshApi'
 import StoryReader from '@/components/StoryReader.vue'
 import PlanetDrawer from '@/components/PlanetDrawer.vue'
+import ConceptDrawer from '@/components/ConceptDrawer.vue'
 import ConceptHUD from '@/components/ConceptHUD.vue'
-import type { CollectedConcept } from '@/components/ConceptHUD.vue'
+import OnboardingTooltip from '@/components/OnboardingTooltip.vue'
+import { createDrawerStack } from '@/composables/useDrawerStack'
+import { useIsMobile } from '@/composables/useIsMobile'
 
 import galaxyFixture from '@/fixtures/galaxy-data.json'
 
 // ── Store & route ─────────────────────────────────────────────────────────────
 const route  = useRoute()
 const router = useRouter()
-const { data: meshData, visitedPlanetIds, collectedConceptIds, persistSet, loadFromFixture } = useMeshStore()
+const { data: meshData, galaxyId, visitedPlanetIds, collectedConceptIds, markPlanetVisited, collectConcept, loadFromFixture, getOrGenerateSystemPreset } = useMeshStore()
+
+// ── Onboarding: only show for the user's very first galaxy ────────────────
+const FIRST_GALAXY_KEY = 'ss.firstGalaxyId'
+const isFirstGalaxy = computed(() => {
+  const stored = localStorage.getItem(FIRST_GALAXY_KEY)
+  return !!stored && stored === galaxyId.value
+})
 
 const systemId = computed(() => route.params.clusterId as string)
 const solarSystem = computed<MeshSolarSystem | null>(() =>
@@ -107,9 +156,39 @@ const conceptHudRef  = ref<InstanceType<typeof ConceptHUD>>()
 const storyReaderRef = ref<InstanceType<typeof StoryReader>>()
 
 const navigating    = ref(false)
-const selectedPlanet      = ref<MeshPlanet | null>(null)
-const selectedPlanetColor = ref('#7c9ef8')
 const highlightedConceptIds = ref<string[]>([])
+
+// ── Drawer stacks ─────────────────────────────────────────────────────────────
+const isMobile = useIsMobile()
+const leftStack  = createDrawerStack()   // story history
+const rightStack = createDrawerStack()   // planet/concept history
+
+/** Ids currently being collected by an in-flight GSAP fly. Prevents double-collect. */
+const inFlightSoulIds = new Set<string>()
+
+/** Active entry at the top of the right rail. */
+const rightTop = rightStack.top
+const rightStackOpen = computed(() => rightStack.depth.value > 0)
+const leftStackOpen  = computed(() => leftStack.depth.value > 0)
+const rightCanGoBack = computed(() => rightStack.canGoBack.value)
+const leftCanGoBack  = computed(() => leftStack.canGoBack.value)
+
+const currentRightPlanet = computed(() => {
+  const t = rightTop.value
+  if (!t || t.type !== 'planet') return null
+  return meshData.value?.planets[t.id] ?? null
+})
+const currentRightConcept = computed(() => {
+  const t = rightTop.value
+  if (!t || t.type !== 'concept') return null
+  return meshData.value?.concepts[t.id] ?? null
+})
+const currentRightPlanetColor = computed(() =>
+  currentRightPlanet.value ? planetHex(currentRightPlanet.value.id) : '#7c9ef8',
+)
+const currentRightConceptColor = computed(() =>
+  currentRightConcept.value ? conceptHex(currentRightConcept.value.id) : '#b5a0ff',
+)
 
 // ── Overlay types ─────────────────────────────────────────────────────────────
 interface LabelPos { id: string; x: number; y: number; opacity: number; title: string; color: string; visited: boolean }
@@ -123,7 +202,8 @@ let sceneCtx: ReturnType<typeof useThreeScene> | null = null
 let raycaster: THREE.Raycaster
 let occlusionRay: THREE.Raycaster
 let mouse: THREE.Vector2
-const planetMeshes = new Map<string, THREE.Mesh>()
+const planetMeshes    = new Map<string, THREE.Mesh>()
+const connectionLines = new Map<string, THREE.Line[]>() // keyed by planet id
 let clickableMeshes: THREE.Mesh[] = []
 let occlusionMeshes: THREE.Mesh[] = []  // planets + sun for occlusion testing
 
@@ -156,6 +236,12 @@ const PLANET_COLORS = [
   '#6a8cff', '#ff7c6e', '#7de8c0', '#ffd166',
   '#c77dff', '#4cc9f0', '#f77f00', '#a8dadc',
   '#84a98c', '#e63946', '#457b9d', '#e9c46a',
+]
+/** Must mirror GalaxyView's `SYSTEM_COLORS` exactly (same array, same order)
+ *  so the central sun's color matches the cluster the user clicked into. */
+const SYSTEM_COLORS = [
+  '#6a8cff', '#ff7c6e', '#7de8c0', '#ffd166',
+  '#c77dff', '#4cc9f0', '#f77f00', '#a8dadc',
 ]
 const CONCEPT_COLORS = [
   '#b5a0ff', '#ffc8e8', '#a0f0d0', '#ffeaa7',
@@ -238,11 +324,6 @@ function planetHex(id: string) {
 function conceptHex(id: string) {
   const rng = seededRng(id); return CONCEPT_COLORS[Math.floor(rng() * CONCEPT_COLORS.length)]
 }
-function planetRadius(id: string) {
-  const rng = seededRng(id); rng()
-  return 1.8 + rng() * 2.0 // 1.8–3.8
-}
-
 // ── Procedural planet texture ─────────────────────────────────────────────────
 function makePlanetTexture(id: string, hexColor: string): THREE.CanvasTexture {
   const rng = seededRng(id + 'tex')
@@ -536,19 +617,7 @@ function makeExoticTexture(typeId: string, planetId: string): THREE.CanvasTextur
   return new THREE.CanvasTexture(cv)
 }
 
-// ── Atmosphere + ring helpers ──────────────────────────────────────────────────
-function addAtmosphere(parent: THREE.Mesh, hexColor: string, r: number, opacity: number) {
-  const c = new THREE.Color(hexColor)
-  for (let i = 1; i <= 2; i++) {
-    const geo = new THREE.SphereGeometry(r * (1.22 + i * 0.16), 16, 16)
-    const mat = new THREE.MeshBasicMaterial({
-      color: c, transparent: true, opacity: opacity / i,
-      side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false,
-    })
-    parent.add(new THREE.Mesh(geo, mat))
-  }
-}
-
+// ── Ring helper ───────────────────────────────────────────────────────────────
 function addRings(parent: THREE.Mesh, r: number) {
   const innerR = r * 1.35, outerR = r * 2.4
   const geo = new THREE.RingGeometry(innerR, outerR, 90, 1)
@@ -579,9 +648,14 @@ type SunAnimFn = (pos: Float32Array, col: Float32Array, elapsed: number, count: 
 const SUN_PRESETS = ['sphere', 'helix', 'torus', 'crown', 'burst', 'atom', 'quantum', 'mobius', 'neutron', 'dna'] as const
 type  SunPreset  = typeof SUN_PRESETS[number]
 
+/**
+ * Look up the system's particle preset from the meshStore (chosen randomly
+ * on first generation, persisted per galaxy). GalaxyView uses the same
+ * lookup so the central sun shape always matches the cluster shape the
+ * user clicked into.
+ */
 function sunPresetForSystem(id: string): SunPreset {
-  const rng = seededRng(id + '_preset')
-  return SUN_PRESETS[Math.floor(rng() * SUN_PRESETS.length)]
+  return getOrGenerateSystemPreset(id, SUN_PRESETS) as SunPreset
 }
 
 const SUN_PRESET_ROTATION: Record<SunPreset, { axis: [number, number, number]; speed: number }> = {
@@ -855,6 +929,8 @@ function buildScene() {
   const data = meshData.value
 
   planetMeshes.clear()
+  connectionLines.clear()
+  activePlanetLines = []
   soulMeshes.clear()
   soulBasePos.clear()
   soulPhases.clear()
@@ -863,18 +939,22 @@ function buildScene() {
   soulClickables   = []
   labelWorldData.splice(0)
 
-  // ── Central sun (particle formation — same preset as galaxy view) ────────────
+  // ── Central sun (particle formation — same preset + color as galaxy view) ───
+  // Uses SYSTEM_COLORS (mirrors GalaxyView) so the sun matches the cluster
+  // shape AND color the user clicked into.
   const rng     = seededRng(sys.id)
-  const sunHex  = PLANET_COLORS[Math.floor(rng() * PLANET_COLORS.length)]
+  const sunHex  = SYSTEM_COLORS[Math.floor(rng() * SYSTEM_COLORS.length)]
   const sunColor = new THREE.Color(sunHex)
 
   const sunPreset    = sunPresetForSystem(sys.id)
-  // Mirror GalaxyView exactly (r = 5 + planetCount*0.35, count = 320 + planetCount*18)
-  // then scale down to 60% so it reads as "same formation, zoomed in"
+  // Mirror GalaxyView's formation (r = 5 + planetCount*0.35) scaled to 60%,
+  // but with ~2.5× the particle count. At close range the smaller radius
+  // makes inter-particle gaps visible — more particles fill the structure
+  // so the formation reads as defined rather than sparse.
   const GALAXY_SCALE = 0.60
   const planetCount  = sys.planets.length
   const SUN_R        = (5 + planetCount * 0.35) * GALAXY_SCALE
-  const SUN_COUNT    = 320 + planetCount * 18
+  const SUN_COUNT    = 800 + planetCount * 45
   const sunAnimFn    = SUN_PRESET_ANIM[sunPreset]
   const sunPtGeo     = new THREE.BufferGeometry()
 
@@ -884,7 +964,7 @@ function buildScene() {
     sunPtGeo.setAttribute('position', new THREE.BufferAttribute(sunParticlePosArray, 3))
     sunPtGeo.setAttribute('color',    new THREE.BufferAttribute(sunParticleColArray, 3))
     const sunMat = new THREE.PointsMaterial({
-      size: 0.38, transparent: true, opacity: 0.88,
+      size: 0.30, transparent: true, opacity: 0.92,
       blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true, vertexColors: true,
     })
     sunParticle       = new THREE.Points(sunPtGeo, sunMat)
@@ -895,7 +975,7 @@ function buildScene() {
     const positions = buildSunFormation(sunPreset, SUN_COUNT, SUN_R)
     sunPtGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
     const sunMat = new THREE.PointsMaterial({
-      color: sunColor, size: 0.36, transparent: true, opacity: 0.82,
+      color: sunColor, size: 0.28, transparent: true, opacity: 0.88,
       blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
     })
     sunParticle = new THREE.Points(sunPtGeo, sunMat)
@@ -941,7 +1021,6 @@ function buildScene() {
           ? makeExoticTexture(ptype.id, planet.id)
           : makePlanetTexture(planet.id, planetHex(planet.id)))
 
-    const tintColor = new THREE.Color(hex)
     const geo = new THREE.SphereGeometry(r, 36, 36)
     const mat = new THREE.MeshStandardMaterial({
       map: tex,
@@ -960,21 +1039,95 @@ function buildScene() {
     // Rings (saturn type only)
     if (ptype.hasRings) addRings(mesh, r)
 
-    // Thin radial line to sun
-    const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), pos])
-    const lineMat = new THREE.LineBasicMaterial({
-      color: 0xffffff, transparent: true, opacity: 0.08,
-      blending: THREE.AdditiveBlending, depthWrite: false,
-    })
-    const line = new THREE.Line(lineGeo, lineMat)
-    line.userData = { clearable: true }
-    scene.add(line)
-
     scene.add(mesh)
     planetMeshes.set(planet.id, mesh)
     clickableMeshes.push(mesh)
     occlusionMeshes.push(mesh)
     labelWorldData.push({ id: planet.id, pos: pos.clone(), title: planet.title, color: hex, baseRadius: r })
+  })
+
+  // ── Planet-to-planet connection lines (hidden until a planet is opened) ───
+  const seenPairs = new Set<string>()
+  sys.planets.forEach((planetId) => {
+    const planet = data.planets[planetId]
+    if (!planet) return
+    const fromMesh = planetMeshes.get(planetId)
+    if (!fromMesh) return
+    const hex   = planetHex(planetId)
+    const color = new THREE.Color(hex)
+
+    const lines: THREE.Line[] = []
+    planet.planetConnections.forEach((targetId) => {
+      if (seenPairs.has([planetId, targetId].sort().join('|'))) return
+      seenPairs.add([planetId, targetId].sort().join('|'))
+
+      const toMesh = planetMeshes.get(targetId)
+      if (!toMesh) return
+
+      // Each planet gets its own directed dash line so dots always flow
+      // away from whichever planet is currently open in the drawer.
+      function makeDashLine(from: THREE.Vector3, to: THREE.Vector3, col: THREE.Color): THREE.Line {
+        const segLen = from.distanceTo(to)
+        const geo    = new THREE.BufferGeometry().setFromPoints([from.clone(), to.clone()])
+        geo.setAttribute('lineDistance', new THREE.Float32BufferAttribute([0, segLen], 1))
+        const mat = new THREE.ShaderMaterial({
+          uniforms: {
+            uColor:   { value: col.clone() },
+            uOpacity: { value: 0 },
+            uTime:    { value: 0 },
+            uDash:    { value: 1.4 },
+            uGap:     { value: 1.2 },
+          },
+          vertexShader: /* glsl */`
+            attribute float lineDistance;
+            varying float vDist;
+            void main() {
+              vDist = lineDistance;
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+          `,
+          fragmentShader: /* glsl */`
+            uniform vec3  uColor;
+            uniform float uOpacity;
+            uniform float uTime;
+            uniform float uDash;
+            uniform float uGap;
+            varying float vDist;
+            void main() {
+              float period = uDash + uGap;
+              float pos    = mod(vDist - uTime, period);
+              if (pos > uDash) discard;
+              float t    = pos / uDash;
+              float glow = clamp(1.0 - abs(t - 0.5) * 1.6, 0.0, 1.0);
+              float alpha = uOpacity * (0.55 + glow * 0.45);
+              gl_FragColor = vec4(uColor * (1.0 + glow * 0.6), alpha);
+            }
+          `,
+          transparent: true,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        })
+        const ln = new THREE.Line(geo, mat)
+        ln.userData = { clearable: true, isDash: true }
+        scene.add(ln)
+        return ln
+      }
+
+      const targetColor = new THREE.Color(planetHex(targetId))
+
+      // Colour = destination planet's colour so each line "arrives" in the target's hue
+      // From planetId → targetId: coloured in targetId's hue
+      const fwdLn = makeDashLine(fromMesh.position, toMesh.position, targetColor)
+      lines.push(fwdLn)
+
+      // From targetId → planetId: coloured in planetId's hue
+      const revLn = makeDashLine(toMesh.position, fromMesh.position, color)
+      const targetLines = connectionLines.get(targetId) ?? []
+      targetLines.push(revLn)
+      connectionLines.set(targetId, targetLines)
+    })
+    const existing = connectionLines.get(planetId) ?? []
+    connectionLines.set(planetId, [...existing, ...lines])
   })
 
   // ── Concepts (3D soul sprites) ────────────────────────────────────────────
@@ -1039,13 +1192,19 @@ function onFrame(elapsed: number) {
     mesh.rotation.x += 0.0006
   })
 
+  // Advance shader time so dash dots march along active connection lines
+  activePlanetLines.forEach((ln) => {
+    if (!ln.userData.isDash) return
+    ;(ln.material as THREE.ShaderMaterial).uniforms.uTime.value = elapsed * 3.5
+  })
+
   if (!sceneCtx || !containerRef.value) return
   const cam = sceneCtx.camera
 
   // Soul sprite animation
   const _dir = new THREE.Vector3()
   soulMeshes.forEach((sprite, conceptId) => {
-    if (collectedConceptIds.value.has(conceptId)) {
+    if (collectedConceptIds.value.has(conceptId) || inFlightSoulIds.has(conceptId)) {
       sprite.visible = false
       return
     }
@@ -1105,7 +1264,7 @@ function onFrame(elapsed: number) {
 
 // ── Raycasting ─────────────────────────────────────────────────────────────────
 function onMouseMove(e: MouseEvent) {
-  if (!sceneCtx || !containerRef.value || selectedPlanet.value || navigating.value) return
+  if (!sceneCtx || !containerRef.value || navigating.value) return
   const rect = containerRef.value.getBoundingClientRect()
   mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
   mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
@@ -1113,7 +1272,10 @@ function onMouseMove(e: MouseEvent) {
 
   // Soul sprites take cursor priority
   const soulHits = raycaster.intersectObjects(soulClickables, false)
-  const soulHit  = soulHits.find(h => h.object.userData.conceptId && !collectedConceptIds.value.has(h.object.userData.conceptId))
+  const soulHit  = soulHits.find((h) => {
+    const cid = h.object.userData.conceptId as string | undefined
+    return !!cid && !collectedConceptIds.value.has(cid) && !inFlightSoulIds.has(cid)
+  })
   if (soulHit) { containerRef.value.style.cursor = 'pointer'; return }
 
   const hits = raycaster.intersectObjects(clickableMeshes, true)
@@ -1122,7 +1284,7 @@ function onMouseMove(e: MouseEvent) {
 }
 
 function onClick(e: MouseEvent) {
-  if (!sceneCtx || !containerRef.value || selectedPlanet.value || navigating.value) return
+  if (!sceneCtx || !containerRef.value || navigating.value) return
   const rect = containerRef.value.getBoundingClientRect()
   mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
   mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
@@ -1130,8 +1292,11 @@ function onClick(e: MouseEvent) {
 
   // Soul sprites checked first
   const soulHits = raycaster.intersectObjects(soulClickables, false)
-  const soulHit  = soulHits.find(h => h.object.userData.conceptId && !collectedConceptIds.value.has(h.object.userData.conceptId))
-  if (soulHit) { collectSoul(soulHit.object.userData.conceptId); return }
+  const soulHit  = soulHits.find((h) => {
+    const cid = h.object.userData.conceptId as string | undefined
+    return !!cid && !collectedConceptIds.value.has(cid) && !inFlightSoulIds.has(cid)
+  })
+  if (soulHit) { collectSoulFromScene(soulHit.object.userData.conceptId); return }
 
   const hits = raycaster.intersectObjects(clickableMeshes, true)
   const hit  = hits.find((h) => h.object.userData.planetId || h.object.parent?.userData.planetId)
@@ -1170,37 +1335,59 @@ function flyToPlanet(planetId: string, openDrawer: boolean) {
 function openPlanetById(planetId: string) {
   const planet = meshData.value?.planets[planetId]
   if (!planet) return
-  selectedPlanet.value  = planet
-  selectedPlanetColor.value = planetHex(planetId)
-  const next = new Set([...visitedPlanetIds.value, planetId])
-  visitedPlanetIds.value = next
-  persistSet('scholarSystem.visitedPlanets', next)
+  // Collapse the story drawer (preserving its state) so only one rail is
+  // visible at a time. The Stories trigger now shows a "Resume" affordance.
+  storyReaderRef.value?.collapse()
+  if (isMobile.value) leftStack.clear()
+  // Direct map click: replace so the back-stack doesn't grow; wikilinks push separately
+  if (rightStack.depth.value > 0) rightStack.replace({ type: 'planet', id: planetId })
+  else rightStack.push({ type: 'planet', id: planetId })
+  markPlanetVisited(planetId)
 }
 
-function closeDrawer() {
-  selectedPlanet.value = null
+function closeRight() {
+  rightStack.clear()
   if (sceneCtx) {
     sceneCtx.controls.enabled = true
-    const tl = gsap.timeline({
-      onUpdate: () => { sceneCtx!.controls.update() },
-    })
+    const tl = gsap.timeline({ onUpdate: () => { sceneCtx!.controls.update() } })
+    tl.to(sceneCtx.camera.position, { x: 0, y: 0, z: 85, duration: 0.6, ease: 'power2.inOut' }, 0)
+    tl.to(sceneCtx.controls.target,  { x: 0, y: 0, z: 0,  duration: 0.6, ease: 'power2.inOut' }, 0)
+  }
+}
+
+function popRight() {
+  rightStack.pop()
+  // If new top is a planet and the camera isn't already there, re-fly
+  const t = rightStack.top.value
+  if (t && t.type === 'planet' && sceneCtx) {
+    flyToPlanet(t.id, false)
+  } else if (!t && sceneCtx) {
+    // Stack empty — zoom back out
+    sceneCtx.controls.enabled = true
+    const tl = gsap.timeline({ onUpdate: () => { sceneCtx!.controls.update() } })
     tl.to(sceneCtx.camera.position, { x: 0, y: 0, z: 85, duration: 0.6, ease: 'power2.inOut' }, 0)
     tl.to(sceneCtx.controls.target,  { x: 0, y: 0, z: 0,  duration: 0.6, ease: 'power2.inOut' }, 0)
   }
 }
 
 // ── Concept soul collection ────────────────────────────────────────────────────
-function collectSoul(conceptId: string) {
-  if (collectedConceptIds.value.has(conceptId)) return
+
+/** Click from a 3D soul sprite: run the GSAP fly, then collect + open the drawer. */
+function collectSoulFromScene(conceptId: string) {
+  if (collectedConceptIds.value.has(conceptId) || inFlightSoulIds.has(conceptId)) return
   if (!conceptHudRef.value || !flyingSoulRef.value || !containerRef.value || !sceneCtx) return
   const concept = meshData.value?.concepts[conceptId]
   if (!concept) return
 
   const color     = conceptHex(conceptId)
   const hudTarget = conceptHudRef.value.getTargetRect()
-  if (!hudTarget) return
+  // If there's no HUD target (pill mode), skip the fly and just collect + open.
+  if (!hudTarget) {
+    collectConcept(conceptId)
+    openConcept(conceptId)
+    return
+  }
 
-  // Project sprite world position → screen coords for the fly-out start point
   const sprite = soulMeshes.get(conceptId)
   if (!sprite) return
   const tmp = sprite.position.clone().project(sceneCtx.camera)
@@ -1220,9 +1407,9 @@ function collectSoul(conceptId: string) {
   fly.style.zIndex      = '9999'
   fly.style.pointerEvents = 'none'
 
-  const nextCollected = new Set([...collectedConceptIds.value, conceptId])
-  collectedConceptIds.value = nextCollected
-  persistSet('scholarSystem.collectedConcepts', nextCollected)
+  inFlightSoulIds.add(conceptId)
+  // Hide the 3D sprite immediately so the flying HTML element appears to BE the soul
+  sprite.visible = false
 
   const destX = hudTarget.left + hudTarget.width  / 2 - 11
   const destY = hudTarget.top  + hudTarget.height / 2 - 13
@@ -1235,30 +1422,237 @@ function collectSoul(conceptId: string) {
       onComplete: () => {
         fly.style.display = 'none'
         gsap.set(fly, { x: 0, y: 0, scale: 1, opacity: 1 })
-        conceptHudRef.value?.collect({ id: conceptId, title: concept.title, color } satisfies CollectedConcept)
+        collectConcept(conceptId)          // persists + reveals slot in HUD
+        inFlightSoulIds.delete(conceptId)
+        openConcept(conceptId, true)        // collect-and-open (fromMap = replace)
       },
     })
 }
 
-// ── Story/concept handlers ─────────────────────────────────────────────────────
-function onStoryVisitPlanet(planetId: string) { flyToPlanet(planetId, false) }
-function onHighlightConcepts(ids: string[])   { highlightedConceptIds.value = ids }
-function onNavigateToPlanet(planetId: string) {
-  if (!sceneCtx) return
-  // Close drawer immediately, zoom out to overview, then fly to new planet
-  selectedPlanet.value = null
-  sceneCtx.controls.enabled = false
-  const tl = gsap.timeline({
-    onUpdate:  () => { sceneCtx!.controls.update() },
-    onComplete: () => { flyToPlanet(planetId, true) },
-  })
-  tl.to(sceneCtx.camera.position, { x: 0, y: 0, z: 85, duration: 0.6, ease: 'power2.inOut' }, 0)
-  tl.to(sceneCtx.controls.target,  { x: 0, y: 0, z: 0,  duration: 0.6, ease: 'power2.inOut' }, 0)
+// ── Story / concept / planet handlers ─────────────────────────────────────────
+
+function onHighlightConcepts(ids: string[]) { highlightedConceptIds.value = ids }
+
+/** Find which solar system contains a planet (for cross-system navigation). */
+function findSystemForPlanet(planetId: string): string | null {
+  if (!meshData.value) return null
+  for (const sys of Object.values(meshData.value.solarSystems)) {
+    if (sys.planets.includes(planetId)) return sys.id
+  }
+  return null
 }
-function onOpenConcept(_id: string)           { /* future */ }
-function onOpenStory(storyId: string)         { storyReaderRef.value?.openById(storyId) }
+
+/**
+ * Travel to a planet that lives in a different solar system.
+ * Plays the back-to-galaxy transition, then routes to galaxy view with
+ * `goSystem` + `openPlanet` query so galaxy auto-enters and the destination
+ * solar view auto-opens the planet drawer on arrival. Also captures the
+ * current story reader state so it can be restored on the other side.
+ */
+function travelToOtherSystemPlanet(planetId: string, targetSysId: string) {
+  if (!sceneCtx || navigating.value) return
+  // Snapshot story state so we can restore it on arrival
+  const storyState = storyReaderRef.value?.getCurrentState()
+  const fromStory  = storyState?.storyId ?? null
+  const storyScene = storyState?.sceneIndex ?? 0
+
+  navigating.value = true
+  sceneCtx.controls.enabled = false
+  if (veilRef.value) gsap.to(veilRef.value, {
+    opacity: 1, duration: 0.35, ease: 'power1.in',
+    onComplete: () => {
+      triggerWarp(700, 'in')
+      setTimeout(() => {
+        bypassLeaveGuard = true
+        router.push({
+          name: 'galaxy',
+          params: { id: route.params.id },
+          query: {
+            goSystem: targetSysId,
+            openPlanet: planetId,
+            ...(fromStory ? { fromStory, storyScene: String(storyScene) } : {}),
+          },
+        })
+      }, 380)
+    },
+  })
+}
+
+/**
+ * "Visit planet" button in story scene → cross-system aware.
+ * Closes any open drawers fully (story collapses with state preserved,
+ * right rail clears) before flying or transitioning, so the user gets a
+ * clean visual sequence: drawer slides out → camera moves → new drawer
+ * slides in.
+ */
+function onStoryVisitPlanet(planetId: string) {
+  if (!sceneCtx) return
+
+  const sameSystem  = planetMeshes.has(planetId)
+  const targetSysId = sameSystem ? null : findSystemForPlanet(planetId)
+  if (!sameSystem && !targetSysId) return
+
+  // Close any open drawers first. `collapse()` preserves the story state
+  // so the trigger keeps showing the Resume affordance.
+  const storyWasOpen     = storyReaderRef.value?.getCurrentState().isOpen ?? false
+  const planetDrawerOpen = rightStack.depth.value > 0
+  const needsCloseAnim   = storyWasOpen || planetDrawerOpen
+  if (storyWasOpen)     storyReaderRef.value?.collapse()
+  if (planetDrawerOpen) rightStack.clear()
+
+  const proceed = () => {
+    if (sameSystem) {
+      flyToPlanet(planetId, true)
+    } else {
+      travelToOtherSystemPlanet(planetId, targetSysId!)
+    }
+  }
+
+  // Wait for the drawer slide-out animation (DrawerShell transition is 350ms)
+  // before camera/route work begins. Otherwise the panels visibly overlap.
+  if (needsCloseAnim) setTimeout(proceed, 380)
+  else proceed()
+}
+
+/** Wikilink → navigate to a planet (same flow as visit-planet button). */
+function onNavigateToPlanet(planetId: string) {
+  onStoryVisitPlanet(planetId)
+}
+
+/** Open a concept drawer. Silently collects it if not already collected. */
+function openConcept(conceptId: string, fromMap = false) {
+  const concept = meshData.value?.concepts[conceptId]
+  if (!concept) return
+  collectConcept(conceptId) // no-op if already collected
+  // Collapse the story drawer (preserving its state) so only one rail is
+  // visible at a time. Stories trigger now shows the "Resume" affordance.
+  storyReaderRef.value?.collapse()
+  if (isMobile.value) leftStack.clear()
+  // Direct map click replaces current drawer; wikilink/HUD clicks push onto the stack
+  if (fromMap && rightStack.depth.value > 0) rightStack.replace({ type: 'concept', id: conceptId })
+  else rightStack.push({ type: 'concept', id: conceptId })
+}
+
+/** Emitted from any drawer's wikilink handler. */
+function onOpenConcept(conceptId: string) { openConcept(conceptId) }
+
+/** Emitted from the HUD when a collected soul is clicked. */
+function onHudOpenConcept(conceptId: string) { openConcept(conceptId, true) }
+
+/** Emitted from any drawer's wikilink handler for story links. */
+function onOpenStory(storyId: string) {
+  if (isMobile.value) rightStack.clear()
+  leftStack.push({ type: 'story', id: storyId })
+  storyReaderRef.value?.openById(storyId)
+}
+
+/** StoryReader back button — pop the left stack. */
+function onStoryBack() {
+  leftStack.pop()
+  const t = leftStack.top.value
+  if (t && t.type === 'story') {
+    storyReaderRef.value?.openById(t.id)
+  } else {
+    storyReaderRef.value?.backToList()
+  }
+}
+
+function onStoryClose() { leftStack.clear() }
+
+/**
+ * Story drawer transitioned closed → open. Clear the right rail (planet or
+ * concept drawer) so only one rail is visible at a time. The right-rail's
+ * state isn't preserved — the user can re-click the planet/concept in the
+ * 3D scene if they want to revisit it.
+ */
+function onStoryOpened() {
+  if (rightStack.depth.value === 0) return
+  rightStack.clear()
+  if (sceneCtx) {
+    sceneCtx.controls.enabled = true
+    const tl = gsap.timeline({ onUpdate: () => { sceneCtx!.controls.update() } })
+    tl.to(sceneCtx.camera.position, { x: 0, y: 0, z: 85, duration: 0.6, ease: 'power2.inOut' }, 0)
+    tl.to(sceneCtx.controls.target,  { x: 0, y: 0, z: 0,  duration: 0.6, ease: 'power2.inOut' }, 0)
+  }
+}
+
+/**
+ * Handle deep-link query params on arrival:
+ * - From StatsView: ?openPlanet=id | openConcept=id | openStory=id
+ * - From cross-system traversal: ?openPlanet=id&fromStory=id&storyScene=N
+ *   (planet drawer opens, then story reader reopens at the same scene)
+ */
+function applyDeepLinkQuery() {
+  const q = route.query
+  const planetQ     = typeof q.openPlanet  === 'string' ? q.openPlanet  : null
+  const conceptQ    = typeof q.openConcept === 'string' ? q.openConcept : null
+  const storyQ      = typeof q.openStory   === 'string' ? q.openStory   : null
+  const fromStoryQ  = typeof q.fromStory   === 'string' ? q.fromStory   : null
+  const storySceneQ = typeof q.storyScene  === 'string' ? q.storyScene  : null
+
+  if (planetQ && meshData.value?.planets[planetQ]) {
+    flyToPlanet(planetQ, true)
+  } else if (conceptQ && meshData.value?.concepts[conceptQ]) {
+    openConcept(conceptQ)
+  } else if (storyQ && meshData.value?.stories.find((s) => s.id === storyQ)) {
+    onOpenStory(storyQ)
+  }
+
+  // Cross-system arrival: restore the story state internally without
+  // opening the drawer. The planet drawer takes focus on arrival; the
+  // Stories trigger shows a "Resume" affordance so the user can pick up
+  // where they left off when they're done with the planet.
+  if (fromStoryQ && meshData.value?.stories.find((s) => s.id === fromStoryQ)) {
+    const sceneIdx = parseInt(storySceneQ ?? '0', 10) || 0
+    setTimeout(() => {
+      storyReaderRef.value?.restoreState(fromStoryQ, sceneIdx)
+    }, 200)
+  }
+
+  // Strip the query so a refresh doesn't re-open the drawer.
+  if (planetQ || conceptQ || storyQ || fromStoryQ) {
+    router.replace({
+      name: 'solar-system',
+      params: { id: route.params.id, clusterId: route.params.clusterId },
+    })
+  }
+}
 
 // ── Back navigation ────────────────────────────────────────────────────────────
+// Set to true before any programmatic router.push so the leave guard below
+// doesn't play the animation a second time for navigations we already animated.
+let bypassLeaveGuard = false
+
+// Intercepts browser back-button (and any other navigation away from this view).
+// Cancels the nav, plays the warp-out animation, then re-fires the navigation
+// with bypassLeaveGuard=true so it goes straight through on the second pass.
+onBeforeRouteLeave((_to, _from, next) => {
+  if (bypassLeaveGuard) {
+    bypassLeaveGuard = false
+    next()
+    return
+  }
+  // Already mid-animation (e.g. navigateBack is in progress) — let it through.
+  if (navigating.value) {
+    next()
+    return
+  }
+  // Browser-initiated navigation: cancel, animate, then re-push to galaxy.
+  next(false)
+  navigating.value = true
+  if (sceneCtx) sceneCtx.controls.enabled = false
+  if (veilRef.value) gsap.to(veilRef.value, {
+    opacity: 1, duration: 0.35, ease: 'power1.in',
+    onComplete: () => {
+      triggerWarp(700, 'in')
+      setTimeout(() => {
+        bypassLeaveGuard = true
+        router.push({ name: 'galaxy', params: { id: route.params.id } })
+      }, 380)
+    },
+  })
+})
+
 function navigateBack() {
   if (!sceneCtx || navigating.value) return
   navigating.value = true
@@ -1271,6 +1665,7 @@ function navigateBack() {
       triggerWarp(700, 'in')
       // Step 3: navigate partway through warp so new scene loads while stars are flying
       setTimeout(() => {
+        bypassLeaveGuard = true
         router.push({ name: 'galaxy', params: { id: route.params.id } })
       }, 380)
     },
@@ -1280,17 +1675,41 @@ function navigateBack() {
 // ── Lifecycle ──────────────────────────────────────────────────────────────────
 const { triggerWarp } = useWarpEffect()
 
+// ── Connection line fade ───────────────────────────────────────────────────────
+let activePlanetLines: THREE.Line[] = []
+
+watch(currentRightPlanet, (next, prev) => {
+  if (prev?.id) {
+    connectionLines.get(prev.id)?.forEach((ln) => {
+      gsap.to((ln.material as THREE.ShaderMaterial).uniforms.uOpacity, { value: 0, duration: 0.3, ease: 'power2.in' })
+    })
+  }
+  if (next?.id) {
+    const lines = connectionLines.get(next.id) ?? []
+    activePlanetLines = lines
+    lines.forEach((ln) => {
+      gsap.to((ln.material as THREE.ShaderMaterial).uniforms.uOpacity, { value: 0.75, duration: 0.5, ease: 'power2.out' })
+    })
+  } else {
+    activePlanetLines = []
+  }
+})
+
 onMounted(() => {
-  if (!meshData.value) loadFromFixture(galaxyFixture)
+  if (!meshData.value) loadFromFixture(galaxyFixture, (route.params.id as string) ?? 'fixture')
   if (!containerRef.value) return
 
-  const isMobile = window.innerWidth < 768
+  const mobileInit = window.innerWidth < 768
   sceneCtx = useThreeScene(containerRef.value, {
-    bloomStrength:  0.04,
-    bloomRadius:    0.2,
-    bloomThreshold: 0.35,
-    starCount: 1000,
-    cameraZ: isMobile ? 130 : 85,
+    // High threshold means only the brightest pixels (hero stars + sun core)
+    // bloom — textured planets stay clean even with strength bumped up.
+    bloomStrength:  0.18,
+    bloomRadius:    0.35,
+    bloomThreshold: 0.6,
+    starCount: 1800,
+    heroStarCount: 90,
+    nebulaCount: 6,
+    cameraZ: mobileInit ? 130 : 85,
     enableDamping: true,
   })
 
@@ -1312,24 +1731,17 @@ onMounted(() => {
   preloadPlanetTextures(() => {
     buildScene()
 
-    // Restore collected souls into the HUD from persisted store
-    nextTick(() => {
-      for (const conceptId of collectedConceptIds.value) {
-        const concept = meshData.value?.concepts[conceptId]
-        if (!concept) continue
-        conceptHudRef.value?.collect({
-          id: conceptId,
-          title: concept.title,
-          color: conceptHex(conceptId),
-        })
-      }
-    })
+    // Note: collected souls are now bound reactively from meshStore via ConceptHUD,
+    // so persisted ones appear automatically once galaxy data is loaded.
+
+    // If we arrived via a deep link from StatsView, auto-open the requested drawer
+    applyDeepLinkQuery()
 
     // Arrival: fade the veil out — warp already played during departure from GalaxyView
     if (veilRef.value) gsap.fromTo(veilRef.value, { opacity: 1 }, { opacity: 0, duration: 0.5, delay: 0.15, ease: 'power1.out' })
   })
 
-  if (!isMobile) containerRef.value.addEventListener('mousemove', onMouseMove)
+  if (!mobileInit) containerRef.value.addEventListener('mousemove', onMouseMove)
   containerRef.value.addEventListener('click', onClick)
 })
 
@@ -1343,7 +1755,12 @@ onUnmounted(() => {
 <style scoped>
 .solar-view {
   position: fixed; inset: 0;
-  background: #02040a; overflow: hidden; cursor: grab;
+  /* Deep-space gradient: very subtle purple-blue core, mostly near-black so
+     planets retain contrast. The Three canvas above is transparent so this
+     tints the whole scene. */
+  background:
+    radial-gradient(ellipse at 50% 40%, #0a0618 0%, #06051a 28%, #04040f 60%, #02030a 100%);
+  overflow: hidden; cursor: grab;
 }
 .solar-view:active { cursor: grabbing; }
 
@@ -1353,9 +1770,13 @@ onUnmounted(() => {
 }
 
 .back-btn {
-  position: absolute; top: 24px; left: 72px; z-index: 20;
+  /* Bottom-left corner. The Stories trigger sits at the top-left, the souls
+     HUD at the bottom-right — back button takes the bottom-left corner. */
+  position: absolute; bottom: 22px; left: 22px; z-index: 20;
   display: flex; align-items: center; gap: 7px;
-  padding: 8px 16px 8px 12px;
+  height: 40px;
+  padding: 0 16px 0 12px;
+  box-sizing: border-box;
   background: rgba(5,8,20,0.6); border: 1px solid rgba(255,255,255,0.07);
   border-radius: 100px;
   font-size: 12px; font-weight: 500; color: #8a9ab8; cursor: pointer;
@@ -1367,12 +1788,27 @@ onUnmounted(() => {
   background: rgba(10,14,30,0.8);
 }
 
+/* Mobile: icon-only back button at the same bottom-left corner. */
+@media (max-width: 768px) {
+  .back-btn {
+    padding: 0 11px;
+    gap: 0;
+  }
+  .back-label { display: none; }
+}
+
 .system-hud {
   position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
   text-align: center; pointer-events: none; z-index: 10;
 }
 .system-name { font-size: 16px; font-weight: 600; color: rgba(255,255,255,0.88); letter-spacing: 0.03em; }
 .system-meta { font-size: 11px; color: rgba(255,255,255,0.3); margin-top: 3px; }
+
+/* Mobile: hide centered system name to free the top bar for the Stories
+   trigger and Galaxy back button (no text collision). */
+@media (max-width: 768px) {
+  .system-hud { display: none; }
+}
 
 /* Planet labels */
 .planet-label {

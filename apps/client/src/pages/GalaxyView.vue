@@ -45,23 +45,34 @@
       </svg>
     </div>
 
-    <!-- Hover tooltip -->
-    <div
-      v-if="hovered"
-      class="node-tooltip"
-      :style="{ left: tooltipPos.x + 'px', top: tooltipPos.y + 'px' }"
-    >
-      {{ hovered.title }}
-    </div>
-
     <!-- Nav veil -->
     <div class="nav-veil" ref="veilRef" />
+
+    <!-- Onboarding tooltip (first galaxy only) -->
+    <OnboardingTooltip
+      v-if="!loading && meshData && isFirstGalaxy"
+      storage-key="ss.onboard.galaxy"
+      text="Each cluster is a theme from your upload. Click one to enter."
+      position="bottom-center"
+    />
+
+    <!-- Story reader (left rail). Galaxy view has no planet drawer to
+         collapse, so no `@opened` handler is needed here. -->
+    <StoryReader
+      v-if="meshData"
+      ref="storyReaderRef"
+      :stories="meshData.stories"
+      :galaxy-data="meshData"
+      @visit-planet="onStoryVisitPlanet"
+      @navigate-to-planet="onStoryNavigateToPlanet"
+      @open-story="onStoryOpenStory"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import * as THREE from 'three'
 import gsap from 'gsap'
 // @ts-expect-error -- d3-force-3d ships incomplete typings
@@ -69,20 +80,73 @@ import { forceSimulation, forceManyBody, forceCenter, forceCollide } from 'd3-fo
 import { useThreeScene } from '@/composables/useThreeScene'
 import { useWarpEffect } from '@/composables/useWarpEffect'
 import { useMeshStore } from '@/lib/meshStore'
+import OnboardingTooltip from '@/components/OnboardingTooltip.vue'
+import StoryReader from '@/components/StoryReader.vue'
+import type { UUID } from '@/lib/meshApi'
 
 import galaxyFixture from '@/fixtures/galaxy-data.json'
 
 // ── Store ─────────────────────────────────────────────────────────────────────
 const router = useRouter()
-const { data: meshData, visitedPlanetIds, loadFromFixture } = useMeshStore()
+const route  = useRoute()
+const { data: meshData, galaxyId, visitedPlanetIds, loadFromFixture, getOrGenerateSystemPreset } = useMeshStore()
+
+// ── Onboarding: only show for the user's very first galaxy ────────────────
+const FIRST_GALAXY_KEY = 'ss.firstGalaxyId'
+const isFirstGalaxy = computed(() => {
+  const stored = localStorage.getItem(FIRST_GALAXY_KEY)
+  return !!stored && stored === galaxyId.value
+})
 
 // ── Refs ──────────────────────────────────────────────────────────────────────
-const containerRef = ref<HTMLDivElement>()
-const veilRef      = ref<HTMLDivElement>()
-const loading      = ref(true)
-const navigating   = ref(false)
-const hovered      = ref<{ title: string } | null>(null)
-const tooltipPos   = ref({ x: 0, y: 0 })
+const containerRef   = ref<HTMLDivElement>()
+const veilRef        = ref<HTMLDivElement>()
+const loading        = ref(true)
+const navigating     = ref(false)
+const storyReaderRef = ref<InstanceType<typeof StoryReader>>()
+
+// ── Story handlers ────────────────────────────────────────────────────────────
+// Galaxy view doesn't have planet drawers — planet navigation animates the
+// camera into the containing solar system, then the destination view opens
+// the planet drawer (driven by the `openPlanet` query param).
+function findSystemForPlanet(planetId: UUID): UUID | null {
+  if (!meshData.value) return null
+  for (const sys of Object.values(meshData.value.solarSystems)) {
+    if (sys.planets.includes(planetId)) return sys.id
+  }
+  return null
+}
+
+function visitPlanetFromGalaxy(planetId: UUID) {
+  const sysId = findSystemForPlanet(planetId)
+  if (!sysId) return
+  // Capture story state so the destination view can restore it on arrival
+  const state = storyReaderRef.value?.getCurrentState()
+  const wasOpen = state?.isOpen ?? false
+  // Close the story drawer fully before kicking off the transition so the
+  // panels don't overlap during the camera fly + route navigation.
+  if (wasOpen) storyReaderRef.value?.collapse()
+  const proceed = () => enterSystem(
+    sysId,
+    planetId,
+    state?.storyId ?? undefined,
+    state ? String(state.sceneIndex) : undefined,
+  )
+  if (wasOpen) setTimeout(proceed, 380)
+  else proceed()
+}
+
+function onStoryVisitPlanet(planetId: UUID) {
+  visitPlanetFromGalaxy(planetId)
+}
+
+function onStoryNavigateToPlanet(planetId: UUID) {
+  visitPlanetFromGalaxy(planetId)
+}
+
+function onStoryOpenStory(storyId: UUID) {
+  storyReaderRef.value?.openById(storyId)
+}
 
 // ── Computed ──────────────────────────────────────────────────────────────────
 const galaxyTitle      = computed(() => 'Scholar Galaxy')
@@ -100,6 +164,30 @@ let sceneCtx: ReturnType<typeof useThreeScene> | null = null
 let raycaster: THREE.Raycaster
 let mouse: THREE.Vector2
 let clickableMeshes: THREE.Mesh[] = []
+let particleTexture: THREE.CanvasTexture | null = null
+
+/**
+ * Soft circular particle texture used as the `map` on every system's
+ * PointsMaterial. Each particle becomes a small soft glowing dot that emits
+ * its own light — no bloom needed, no bubble halos around bright pixels.
+ */
+function makeParticleTexture(): THREE.CanvasTexture {
+  const size = 64
+  const c = document.createElement('canvas')
+  c.width = c.height = size
+  const ctx = c.getContext('2d')!
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2)
+  g.addColorStop(0.0, 'rgba(255,255,255,1)')
+  g.addColorStop(0.30, 'rgba(255,255,255,0.85)')
+  g.addColorStop(0.55, 'rgba(255,255,255,0.35)')
+  g.addColorStop(0.85, 'rgba(255,255,255,0.07)')
+  g.addColorStop(1.0, 'rgba(255,255,255,0)')
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, size, size)
+  const tex = new THREE.CanvasTexture(c)
+  tex.needsUpdate = true
+  return tex
+}
 
 // ── PRNG color seeding ─────────────────────────────────────────────────────────
 const SYSTEM_COLORS = [
@@ -122,9 +210,13 @@ function systemColor(id: string) {
 const PRESETS = ['sphere', 'helix', 'torus', 'crown', 'burst', 'atom', 'quantum', 'mobius', 'neutron', 'dna'] as const
 type Preset = typeof PRESETS[number]
 
+/**
+ * Pick the particle preset for a system. The first time we see a system the
+ * meshStore picks one randomly via Math.random() and persists it; subsequent
+ * calls return the same choice so refreshes and the SolarSystemView agree.
+ */
 function randomPreset(id: string): Preset {
-  const rng = seededRng(id + '_preset')
-  return PRESETS[Math.floor(rng() * PRESETS.length)]
+  return getOrGenerateSystemPreset(id, PRESETS) as Preset
 }
 
 // ── Animated preset type ───────────────────────────────────────────────────────
@@ -299,7 +391,9 @@ function atomAnimFn(pos: Float32Array, col: Float32Array, elapsed: number, count
       const czr = Math.cos(tZ), szr = Math.sin(tZ)
       const ry = by * cxr, rz = by * sxr
       x = bx * czr - ry * szr; y = bx * szr + ry * czr; z = rz
-      const glow = 1.0 - (rSpread / headR) * 0.4
+      // Cap head brightness so additive accumulation doesn't blow out
+      // into a hard white blob (former source of bloom-bubble halos).
+      const glow = (1.0 - (rSpread / headR) * 0.4) * 0.55
       r = glow; g = glow; b = glow
 
     } else if (i < nucleusCount + ringSize * 3 + electronHeadCount + trailPerRing * 3) {
@@ -571,6 +665,13 @@ function buildGraph() {
   if (!sceneCtx || !meshData.value) return
   const { scene } = sceneCtx
   const systems = Object.values(meshData.value.solarSystems)
+  // Soft textured particles mean each particle glows on its own — no bloom
+  // needed. We can use larger sizes without flickering or aliasing.
+  if (!particleTexture) particleTexture = makeParticleTexture()
+  const isMobileView   = window.innerWidth < 768
+  const particleSize   = isMobileView ? 1.10 : 0.85
+  const animatedAlpha  = isMobileView ? 0.95 : 0.90
+  const staticAlpha    = isMobileView ? 0.95 : 0.88
 
   interface SimNode {
     id: string; planetCount: number
@@ -603,8 +704,9 @@ function buildGraph() {
     const sys    = meshData.value!.solarSystems[n.id]
     const preset = randomPreset(n.id)
 
-    // Particle count scales with planet count
-    const particleCount = 320 + n.planetCount * 18
+    // Particle count scales with planet count — denser formations now that
+    // each particle is a soft textured glow rather than a tiny dot.
+    const particleCount = 600 + n.planetCount * 30
 
     const animFn = PRESET_ANIM[preset]
     const ptGeo  = new THREE.BufferGeometry()
@@ -617,8 +719,10 @@ function buildGraph() {
       ptGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3))
       ptGeo.setAttribute('color',    new THREE.BufferAttribute(colArray, 3))
       const ptMat = new THREE.PointsMaterial({
-        size: 0.22, transparent: true, opacity: 0.85,
+        map: particleTexture,
+        size: particleSize, transparent: true, opacity: animatedAlpha,
         blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+        alphaTest: 0.01,
         vertexColors: true,
       })
       points = new THREE.Points(ptGeo, ptMat)
@@ -628,8 +732,10 @@ function buildGraph() {
       const positions = buildParticleFormation(preset, particleCount, r)
       ptGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
       const ptMat = new THREE.PointsMaterial({
-        color, size: 0.22, transparent: true, opacity: 0.80,
+        map: particleTexture,
+        color, size: particleSize, transparent: true, opacity: staticAlpha,
         blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+        alphaTest: 0.01,
       })
       points = new THREE.Points(ptGeo, ptMat)
       const cfg  = PRESET_ROTATION[preset]
@@ -666,7 +772,7 @@ function buildGraph() {
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
     const color = new THREE.Color(systemColor(a.id)).lerp(new THREE.Color(systemColor(b.id)), 0.5)
     const mat = new THREE.PointsMaterial({
-      color, size: 0.4, transparent: true, opacity: 0.1,
+      color, size: 0.85, transparent: true, opacity: 0.45,
       blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
     })
     const pts = new THREE.Points(geo, mat)
@@ -740,6 +846,8 @@ function onFrame(elapsed: number) {
 }
 
 // ── Raycasting ─────────────────────────────────────────────────────────────────
+// Cursor-only hover: no tooltip, just changes the cursor to a pointer when
+// hovering a clickable system so users know they can click into one.
 function onMouseMove(e: MouseEvent) {
   if (!sceneCtx || !containerRef.value || navigating.value) return
   const rect = containerRef.value.getBoundingClientRect()
@@ -748,14 +856,54 @@ function onMouseMove(e: MouseEvent) {
   raycaster.setFromCamera(mouse, sceneCtx.camera)
 
   const hits = raycaster.intersectObjects(clickableMeshes)
-  if (hits.length > 0) {
-    hovered.value = { title: hits[0].object.userData.title }
-    tooltipPos.value = { x: e.clientX - rect.left + 16, y: e.clientY - rect.top - 8 }
-    containerRef.value.style.cursor = 'pointer'
-  } else {
-    hovered.value = null
-    containerRef.value.style.cursor = 'grab'
-  }
+  containerRef.value.style.cursor = hits.length > 0 ? 'pointer' : 'grab'
+}
+
+/**
+ * Animate camera into a system mesh, then route to its solar system view.
+ * If `openPlanetId` is set, the destination view will fly to that planet
+ * and open its drawer on arrival (cross-system traversal from a story).
+ * If `fromStory` + `storyScene` are set, the destination will also reopen
+ * the story reader at that scene index after the planet drawer settles.
+ */
+function enterSystem(
+  systemId: string,
+  openPlanetId?: string,
+  fromStory?: string,
+  storyScene?: string,
+) {
+  if (!sceneCtx || navigating.value) return
+  const mesh = clickableMeshes.find((m) => m.userData.systemId === systemId)
+  if (!mesh) return
+
+  navigating.value = true
+  sceneCtx.controls.enabled = false
+
+  const target = mesh.position.clone()
+  const camDir = sceneCtx.camera.position.clone().sub(target).normalize()
+  const dest   = target.clone().addScaledVector(camDir, 20)
+
+  const tl = gsap.timeline({ onUpdate: () => { sceneCtx!.controls.update() } })
+  tl.to(sceneCtx.camera.position,  { x: dest.x,   y: dest.y,   z: dest.z,   duration: 0.65, ease: 'power2.in' }, 0)
+  tl.to(sceneCtx.controls.target,  { x: target.x, y: target.y, z: target.z, duration: 0.65, ease: 'power2.in' }, 0)
+
+  if (veilRef.value) gsap.to(veilRef.value, {
+    opacity: 1, duration: 0.65, ease: 'power2.in',
+    onComplete: () => {
+      triggerWarp(700, 'out')
+      setTimeout(() => {
+        const query: Record<string, string> = {}
+        if (openPlanetId) query.openPlanet = openPlanetId
+        if (fromStory)    query.fromStory = fromStory
+        if (storyScene)   query.storyScene = storyScene
+        router.push({
+          name: 'solar-system',
+          params: { id: (route.params.id as string) ?? 'demo', clusterId: systemId },
+          query: Object.keys(query).length ? query : undefined,
+        })
+      }, 380)
+    },
+  })
 }
 
 function onClick(e: MouseEvent) {
@@ -770,46 +918,37 @@ function onClick(e: MouseEvent) {
 
   const mesh = hits[0].object as THREE.Mesh
   const systemId = mesh.userData.systemId as string
-  if (!systemId) return
-
-  navigating.value = true
-  sceneCtx.controls.enabled = false
-
-  const target = mesh.position.clone()
-  const camDir = sceneCtx.camera.position.clone().sub(target).normalize()
-  const dest   = target.clone().addScaledVector(camDir, 20)
-
-  const tl = gsap.timeline({ onUpdate: () => { sceneCtx!.controls.update() } })
-  tl.to(sceneCtx.camera.position,  { x: dest.x,   y: dest.y,   z: dest.z,   duration: 0.65, ease: 'power2.in' }, 0)
-  tl.to(sceneCtx.controls.target,  { x: target.x, y: target.y, z: target.z, duration: 0.65, ease: 'power2.in' }, 0)
-
-  gsap.to(veilRef.value, {
-    opacity: 1, duration: 0.65, ease: 'power2.in',
-    onComplete: () => {
-      triggerWarp(700, 'out')
-      setTimeout(() => {
-        router.push({ name: 'solar-system', params: { id: 'demo', clusterId: systemId } })
-      }, 380)
-    },
-  })
+  if (systemId) enterSystem(systemId)
 }
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────────
 const { triggerWarp } = useWarpEffect()
 
 onMounted(() => {
-  loadFromFixture(galaxyFixture)
+  const gid = (route.params.id as string) ?? 'fixture'
+  loadFromFixture(galaxyFixture, gid)
+  // Record the very first galaxy the user ever visits
+  if (!localStorage.getItem(FIRST_GALAXY_KEY)) {
+    localStorage.setItem(FIRST_GALAXY_KEY, gid)
+  }
 
   if (!containerRef.value) return
 
+  // Pull camera further back on mobile so the system labels don't crowd the
+  // top of a small viewport
+  const mobileInit = window.innerWidth < 768
   sceneCtx = useThreeScene(containerRef.value, {
-    bloomStrength: 1.2,
-    bloomRadius: 0.55,
-    bloomThreshold: 0.05,
-    cameraZ: 170,
+    // Bloom completely off — every particle is now a soft textured point
+    // that glows on its own, so bloom isn't needed. This eliminates the
+    // bubble halos around bright pixels (electron heads, etc.) entirely.
+    bloomStrength: 0.0,
+    bloomRadius: 0.0,
+    bloomThreshold: 1.0,
+    cameraZ: mobileInit ? 195 : 170,
     autoRotate: true,
     autoRotateSpeed: 0.08,
     starCount: 1400,
+    nebulaCount: 4,
   })
 
   raycaster = new THREE.Raycaster()
@@ -828,14 +967,33 @@ onMounted(() => {
   // Arrival: just fade the veil out — warp already played during departure from SolarSystemView
   if (veilRef.value) gsap.fromTo(veilRef.value, { opacity: 1 }, { opacity: 0, duration: 0.5, ease: 'power1.out' })
 
-  containerRef.value.addEventListener('mousemove', onMouseMove)
+  // No mousemove on mobile — taps would briefly fire it and flash the
+  // hover tooltip ("little div") on every system tap.
+  if (!mobileInit) containerRef.value.addEventListener('mousemove', onMouseMove)
   containerRef.value.addEventListener('click', onClick)
+
+  // Cross-system traversal: arrived here as a stop-over on the way to a
+  // planet in a different solar system. Briefly show the galaxy, then
+  // auto-enter the target system (which will open the planet on arrival).
+  // Story state (fromStory + storyScene) is forwarded so the destination
+  // solar view can reopen the story reader at the same scene.
+  const goSystem   = route.query.goSystem   as string | undefined
+  const openPlanet = route.query.openPlanet as string | undefined
+  const fromStory  = route.query.fromStory  as string | undefined
+  const storyScene = route.query.storyScene as string | undefined
+  if (goSystem) {
+    setTimeout(() => {
+      enterSystem(goSystem, openPlanet, fromStory, storyScene)
+    }, 850)
+  }
 })
 
 onUnmounted(() => {
   containerRef.value?.removeEventListener('mousemove', onMouseMove)
   containerRef.value?.removeEventListener('click', onClick)
   sceneCtx?.dispose()
+  particleTexture?.dispose()
+  particleTexture = null
 })
 </script>
 
@@ -843,7 +1001,11 @@ onUnmounted(() => {
 .galaxy-view {
   position: fixed;
   inset: 0;
-  background: #02040a;
+  /* Deep-space gradient: very subtle purple-blue core, mostly near-black so
+     particle systems and planets retain contrast. The Three canvas above is
+     transparent so this tints the whole scene. */
+  background:
+    radial-gradient(ellipse at 50% 35%, #0a0618 0%, #06051a 28%, #04040f 60%, #02030a 100%);
   overflow: hidden;
   cursor: grab;
 }
@@ -872,6 +1034,12 @@ onUnmounted(() => {
 .hud-title { font-size: 15px; font-weight: 600; color: rgba(255,255,255,0.85); letter-spacing: 0.04em; }
 .hud-meta  { font-size: 11px; color: rgba(255,255,255,0.3); margin-top: 3px; }
 
+/* Mobile: hide galaxy title + counts to free the top bar for the
+   Stories trigger pill (no text collision). */
+@media (max-width: 768px) {
+  .hud { display: none; }
+}
+
 .node-label {
   position: absolute;
   display: flex; align-items: center; gap: 5px;
@@ -887,19 +1055,6 @@ onUnmounted(() => {
 .sys-progress-ring {
   flex-shrink: 0;
   filter: drop-shadow(0 0 4px #5ba8ff);
-}
-
-.node-tooltip {
-  position: absolute;
-  font-size: 12px;
-  color: rgba(255,255,255,0.6);
-  background: rgba(8,10,20,0.75);
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 8px;
-  padding: 5px 10px;
-  pointer-events: none;
-  backdrop-filter: blur(8px);
-  white-space: nowrap;
 }
 
 .nav-veil {
