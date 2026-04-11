@@ -9,7 +9,7 @@
         </svg>
         <span class="nav-pill-label">Home</span>
       </button>
-      <button class="nav-pill" @click="router.push(`/galaxy/${route.params.id}/chat`)" aria-label="Chat">
+      <button v-if="!isTacoView" class="nav-pill" @click="router.push(`/galaxy/${route.params.id}/chat`)" aria-label="Chat">
         <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
           <path d="M2 2h11v9H8l-3 2V11H2V2z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -36,7 +36,7 @@
             </svg>
             Home
           </button>
-          <button class="nav-drop-item" @click="router.push(`/galaxy/${route.params.id}/chat`); menuOpen = false">
+          <button v-if="!isTacoView" class="nav-drop-item" @click="router.push(`/galaxy/${route.params.id}/chat`); menuOpen = false">
             <svg width="14" height="14" viewBox="0 0 15 15" fill="none">
               <path d="M2 2h11v9H8l-3 2V11H2V2z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
@@ -100,7 +100,7 @@
       :stories="meshData.stories"
       :galaxy-data="meshData"
       :can-go-back="leftCanGoBack"
-      :trigger-top="isMobile ? 22 : 104"
+      :trigger-top="isMobile ? 22 : isTacoView ? 62 : 104"
       @visit-planet="onStoryVisitPlanet"
       @highlight-concepts="onHighlightConcepts"
       @navigate-to-planet="onNavigateToPlanet"
@@ -175,6 +175,7 @@ import { useIsMobile } from '@/composables/useIsMobile'
 // ── Store & route ─────────────────────────────────────────────────────────────
 const route  = useRoute()
 const router = useRouter()
+const isTacoView = computed(() => route.query.source === 'taco')
 const { data: meshData, galaxyId, visitedPlanetIds, collectedConceptIds, markPlanetVisited, collectConcept, loadFromApi, getOrGenerateSystemPreset } = useMeshStore()
 
 // ── Mobile nav menu ───────────────────────────────────────────────────────────
@@ -1609,6 +1610,7 @@ function travelToOtherSystemPlanet(planetId: string, targetSysId: string) {
             goSystem: targetSysId,
             openPlanet: planetId,
             ...(fromStory ? { fromStory, storyScene: String(storyScene) } : {}),
+            ...(isTacoView.value ? { source: 'taco' } : {}),
           },
         })
       }, 380)
@@ -1771,11 +1773,13 @@ function applyDeepLinkQuery() {
     }
   }
 
-  // Strip the query so a refresh doesn't re-open the drawer.
+  // Strip the navigation query so a refresh doesn't re-open the drawer.
+  // Keep source=taco so the view stays in read-only mode.
   if (planetQ || conceptQ || storyQ || fromStoryQ) {
     router.replace({
       name: 'solar-system',
       params: { id: route.params.id, clusterId: route.params.clusterId },
+      query: isTacoView.value ? { source: 'taco' } : undefined,
     })
   }
 }
@@ -1828,7 +1832,11 @@ function navigateBack() {
       // Step 3: navigate partway through warp so new scene loads while stars are flying
       setTimeout(() => {
         bypassLeaveGuard = true
-        router.push({ name: 'galaxy', params: { id: route.params.id } })
+        router.push({
+          name: 'galaxy',
+          params: { id: route.params.id },
+          query: isTacoView.value ? { source: 'taco' } : undefined,
+        })
       }, 380)
     },
   })

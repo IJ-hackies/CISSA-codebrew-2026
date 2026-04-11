@@ -66,6 +66,26 @@ textarea {
   font-family: var(--font-body);
 }
 
+/* ── Global scrollbar — thin, dark, accent thumb ─────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 181, 71, 0.25) transparent;
+}
+*::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 181, 71, 0.25);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 181, 71, 0.50);
+}
+
 /* Hide scrollbar but keep scroll for the recent strip */
 .no-scrollbar::-webkit-scrollbar {
   display: none;

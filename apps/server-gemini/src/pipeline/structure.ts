@@ -29,6 +29,7 @@ import type {
 import { allPlanetTitles, allConceptTitles } from "./context";
 import type { InputBudget } from "./budget";
 import { wordsToOutputTokens, modelForBudget } from "./budget";
+import { updateGalaxyTitle } from "../db/client";
 
 // Strip fenced code blocks and leading headings from freeform prose
 // output. Flash/Pro sometimes wrap markdown in ``` fences or add a
@@ -106,8 +107,16 @@ export async function runClusterStage(
   // Multi-source uploads always go through the AI cluster call so topics can
   // be separated into distinct solar systems.
   if (n === 1) {
-    const title =
-      ctx.galaxyTitle?.trim() || ctx.sources[0]?.title || "Knowledge Galaxy";
+    // Prefer the user-provided galaxy title; fall back to the AI ingest
+    // title (which is thematic, not a filename). Never use a raw filename.
+    const userTitle = ctx.galaxyTitle?.trim();
+    const aiTitle = ctx.sources[0]?.title || "Knowledge Galaxy";
+    const title = (userTitle && userTitle !== "Untitled") ? userTitle : aiTitle;
+    // Write the AI-derived title back to the DB so the dashboard reflects it.
+    if (!userTitle || userTitle === "Untitled") {
+      ctx.galaxyTitle = title;
+      updateGalaxyTitle(ctx.galaxyId, title);
+    }
     const themes = Array.from(
       new Set(ctx.sources.flatMap((s) => s.keyThemes.slice(0, 3))),
     ).slice(0, 5);

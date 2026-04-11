@@ -6,7 +6,7 @@
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { appRoot } from "../workspace/layout";
-import type { GalaxyData, GalaxyRow, JobStatus } from "../types";
+import type { GalaxyData, GalaxyRow, GalaxyCreateResult, JobStatus } from "../types";
 
 const DB_PATH = join(appRoot(), "galaxies.db");
 
@@ -49,19 +49,31 @@ export function db(): Database {
     );
     CREATE INDEX IF NOT EXISTS submissions_galaxy_idx ON submissions(galaxy_id);
   `);
+
+  // Idempotent migrations — ALTER TABLE fails silently if column exists.
+  const migrations = [
+    `ALTER TABLE galaxies ADD COLUMN owner_token TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE galaxies ADD COLUMN is_public   INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE galaxies ADD COLUMN tagline      TEXT`,
+    `ALTER TABLE galaxies ADD COLUMN last_owner_seen_at INTEGER`,
+  ];
+  for (const sql of migrations) {
+    try { _db.exec(sql); } catch { /* column already exists */ }
+  }
+
   return _db;
 }
 
 // ── Galaxy rows ────────────────────────────────────────────────────
 
-export function createGalaxyRow(id: string, title: string): GalaxyRow {
+export function createGalaxyRow(id: string, title: string, ownerToken: string): GalaxyCreateResult {
   const now = Date.now();
   db()
     .prepare(
-      `INSERT INTO galaxies (id, title, status, stage_detail, created_at, updated_at)
-       VALUES (?, ?, 'queued', '', ?, ?)`,
+      `INSERT INTO galaxies (id, title, status, stage_detail, owner_token, created_at, updated_at)
+       VALUES (?, ?, 'queued', '', ?, ?, ?)`,
     )
-    .run(id, title, now, now);
+    .run(id, title, ownerToken, now, now);
   return {
     id,
     title,
@@ -70,13 +82,18 @@ export function createGalaxyRow(id: string, title: string): GalaxyRow {
     error: null,
     createdAt: now,
     updatedAt: now,
+    isPublic: false,
+    tagline: null,
+    lastOwnerSeenAt: null,
+    ownerToken,
   };
 }
 
 export function getGalaxyRow(id: string): GalaxyRow | null {
   const row = db()
     .prepare(
-      `SELECT id, title, status, stage_detail, error, created_at, updated_at
+      `SELECT id, title, status, stage_detail, error, created_at, updated_at,
+              is_public, tagline, last_owner_seen_at
        FROM galaxies WHERE id = ?`,
     )
     .get(id) as
@@ -88,6 +105,9 @@ export function getGalaxyRow(id: string): GalaxyRow | null {
         error: string | null;
         created_at: number;
         updated_at: number;
+        is_public: number;
+        tagline: string | null;
+        last_owner_seen_at: number | null;
       }
     | undefined;
   if (!row) return null;
@@ -99,6 +119,9 @@ export function getGalaxyRow(id: string): GalaxyRow | null {
     error: row.error,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    isPublic: row.is_public === 1,
+    tagline: row.tagline,
+    lastOwnerSeenAt: row.last_owner_seen_at,
   };
 }
 
@@ -109,7 +132,8 @@ export function deleteGalaxyRow(id: string): void {
 export function listGalaxies(): GalaxyRow[] {
   const rows = db()
     .prepare(
-      `SELECT id, title, status, stage_detail, error, created_at, updated_at
+      `SELECT id, title, status, stage_detail, error, created_at, updated_at,
+              is_public, tagline, last_owner_seen_at
        FROM galaxies ORDER BY created_at DESC`,
     )
     .all() as Array<{
@@ -120,6 +144,9 @@ export function listGalaxies(): GalaxyRow[] {
     error: string | null;
     created_at: number;
     updated_at: number;
+    is_public: number;
+    tagline: string | null;
+    last_owner_seen_at: number | null;
   }>;
   return rows.map((row) => ({
     id: row.id,
@@ -129,6 +156,9 @@ export function listGalaxies(): GalaxyRow[] {
     error: row.error,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    isPublic: row.is_public === 1,
+    tagline: row.tagline,
+    lastOwnerSeenAt: row.last_owner_seen_at,
   }));
 }
 
@@ -241,6 +271,126 @@ export function listSubmissions(galaxyId: string): SubmissionRow[] {
     filenames: (() => { try { return JSON.parse(r.filenames) as string[]; } catch { return []; } })(),
     createdAt: r.created_at,
   }));
+}
+
+// ── Gallery / Taco functions ───────────────────────────────────────
+
+/** Shape of a public gallery card (no owner_token, no galaxy_data_json). */
+export interface GalleryCard {
+  id: string;
+  title: string;
+  tagline: string | null;
+  updatedAt: number;
+  solarSystemCount: number;
+  planetCount: number;
+}
+
+/**
+ * Check that an owner_token matches a galaxy. Returns the row if valid,
+ * null otherwise. Never exposes the token in the return value.
+ */
+export function verifyOwnerToken(galaxyId: string, ownerToken: string): GalaxyRow | null {
+  const row = db()
+    .prepare(`SELECT owner_token FROM galaxies WHERE id = ?`)
+    .get(galaxyId) as { owner_token: string } | undefined;
+  if (!row || row.owner_token !== ownerToken || !ownerToken) return null;
+  return getGalaxyRow(galaxyId);
+}
+
+export function publishGalaxy(galaxyId: string, tagline: string): void {
+  db()
+    .prepare(
+      `UPDATE galaxies SET is_public = 1, tagline = ?, last_owner_seen_at = ?, updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(tagline, Date.now(), Date.now(), galaxyId);
+}
+
+export function unpublishGalaxy(galaxyId: string): void {
+  db()
+    .prepare(
+      `UPDATE galaxies SET is_public = 0, updated_at = ? WHERE id = ?`,
+    )
+    .run(Date.now(), galaxyId);
+}
+
+export function updateGalaxyTagline(galaxyId: string, tagline: string): void {
+  db()
+    .prepare(`UPDATE galaxies SET tagline = ?, updated_at = ? WHERE id = ?`)
+    .run(tagline, Date.now(), galaxyId);
+}
+
+/**
+ * Touch last_owner_seen_at for all provided galaxyIds where the token matches.
+ * Returns the set of IDs that were actually updated (valid token).
+ */
+export function reconcileOwnership(owned: Array<{ galaxyId: string; ownerToken: string }>): string[] {
+  const now = Date.now();
+  const updated: string[] = [];
+  const stmt = db().prepare(
+    `UPDATE galaxies SET last_owner_seen_at = ? WHERE id = ? AND owner_token = ? AND owner_token != ''`,
+  );
+  for (const { galaxyId, ownerToken } of owned) {
+    const result = stmt.run(now, galaxyId, ownerToken);
+    if (result.changes > 0) updated.push(galaxyId);
+  }
+  return updated;
+}
+
+/** 7-day TTL in ms */
+const OWNER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * List all public galaxies. Auto-unpublishes stale ones (owner not seen in 7 days).
+ * Returns galaxy cards with counts derived from the cached galaxy_data_json.
+ */
+export function listPublicGalaxies(): GalleryCard[] {
+  const cutoff = Date.now() - OWNER_TTL_MS;
+
+  // Auto-unpublish galaxies whose owner hasn't been seen in 7 days.
+  db()
+    .prepare(
+      `UPDATE galaxies SET is_public = 0
+       WHERE is_public = 1
+         AND (last_owner_seen_at IS NULL OR last_owner_seen_at < ?)`,
+    )
+    .run(cutoff);
+
+  const rows = db()
+    .prepare(
+      `SELECT id, title, tagline, updated_at, galaxy_data_json
+       FROM galaxies WHERE is_public = 1 AND status = 'complete'`,
+    )
+    .all() as Array<{
+    id: string;
+    title: string;
+    tagline: string | null;
+    updated_at: number;
+    galaxy_data_json: string | null;
+  }>;
+
+  return rows.map((row) => {
+    let solarSystemCount = 0;
+    let planetCount = 0;
+    if (row.galaxy_data_json) {
+      try {
+        const data = JSON.parse(row.galaxy_data_json) as {
+          solarSystems?: Record<string, unknown>;
+          planets?: Record<string, unknown>;
+        };
+        solarSystemCount = Object.keys(data.solarSystems ?? {}).length;
+        planetCount = Object.keys(data.planets ?? {}).length;
+      } catch { /* corrupt cache — skip counts */ }
+    }
+    return {
+      id: row.id,
+      title: row.title,
+      tagline: row.tagline,
+      updatedAt: row.updated_at,
+      solarSystemCount,
+      planetCount,
+    };
+  });
 }
 
 export function listSourceRows(galaxyId: string): SourceRow[] {

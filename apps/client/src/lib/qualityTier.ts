@@ -19,6 +19,9 @@ export function detectQualityTier(): QualityProfile {
   const cores = navigator.hardwareConcurrency || 4
   const isMobile =
     /Mobi|Android/i.test(navigator.userAgent) || window.matchMedia('(max-width: 768px)').matches
+  // Laptop: non-mobile screen narrower than 1600px (typical laptop viewport).
+  // Reduce star count by 20% so the starfield doesn't overwhelm the UI.
+  const isLaptop = !isMobile && window.screen.width <= 1600
   const isHigh = !isMobile && cores >= 8
 
   // Mobile always gets a sparse starfield — narrow viewports make the
@@ -37,7 +40,7 @@ export function detectQualityTier(): QualityProfile {
   if (isHigh) {
     return {
       tier: 'high',
-      starCount: 900,
+      starCount: isLaptop ? 720 : 900,
       nebulaCount: 6,
       parallaxLayers: 4,
       enablePostFx: true,
@@ -46,7 +49,7 @@ export function detectQualityTier(): QualityProfile {
   }
   return {
     tier: 'medium',
-    starCount: 520,
+    starCount: isLaptop ? 416 : 520,
     nebulaCount: 5,
     parallaxLayers: 3,
     enablePostFx: false,

@@ -62,13 +62,25 @@ function stopStatusCycle() {
   if (_cycleTimer !== null) { clearTimeout(_cycleTimer); _cycleTimer = null }
 }
 
+// ── Cancel ────────────────────────────────────────────────────────
+let cancelled = false
+
+function cancelAndGoBack() {
+  cancelled = true
+  stopStatusCycle()
+  clearMeshStore()
+  router.replace(`/galaxy/${galaxyId}/chat`)
+}
+
 // ── Poll until renderable ─────────────────────────────────────────
 const POLL_INTERVAL_MS = 2500
 let _lastStage: GalaxyJobStatus | null = null
 
 async function waitForComplete() {
   for (;;) {
+    if (cancelled) return
     const envelope = await fetchGalaxyEnvelope(galaxyId)
+    if (cancelled) return
     if (envelope.status !== _lastStage) {
       _lastStage = envelope.status
       startStatusCycle(envelope.status)
@@ -114,21 +126,27 @@ onMounted(async () => {
   } catch {
     stopStatusCycle()
     clearMeshStore()
-    router.replace(`/galaxy/${galaxyId}/chat`)
+    if (!cancelled) router.replace(`/galaxy/${galaxyId}/chat`)
     return
   }
 
+  if (cancelled) return
+
   if (renderer) await renderer.landRocket()
+
+  if (cancelled) return
 
   stopStatusCycle()
   transitioning.value = true
   await new Promise((r) => setTimeout(r, 450))
+  if (cancelled) return
 
   clearMeshStore()
   router.replace(`/galaxy/${galaxyId}`)
 })
 
 onBeforeUnmount(() => {
+  cancelled = true
   stopStatusCycle()
 })
 </script>
@@ -145,6 +163,9 @@ onBeforeUnmount(() => {
       <span class="launch-status-text" :class="{ fading: statusFading }">{{ statusMessage }}</span>
       <span class="launch-status-dots" aria-hidden="true">...</span>
     </div>
+
+    <!-- Cancel button -->
+    <button class="cancel-btn" @click="cancelAndGoBack">Cancel</button>
 
     <!-- Nebula blobs (match ChatLanding) -->
     <div class="nebula nebula-1" />
@@ -205,6 +226,37 @@ onBeforeUnmount(() => {
 
 .launch-status-text { transition: opacity 200ms ease; }
 .launch-status-text.fading { opacity: 0; }
+
+/* Cancel button */
+.cancel-btn {
+  position: fixed;
+  bottom: calc(28% - 56px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 22;
+  height: 34px;
+  padding: 0 20px;
+  font-family: var(--font-ui);
+  font-size: 0.70rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: rgba(245,240,234,0.45);
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 180ms, border-color 180ms, background 180ms;
+  animation: fadeInCancel 1.2s ease both;
+}
+.cancel-btn:hover {
+  color: rgba(245,240,234,0.85);
+  border-color: rgba(255,255,255,0.22);
+  background: rgba(255,255,255,0.05);
+}
+@keyframes fadeInCancel {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
 
 .launch-status-dots {
   display: inline-block;

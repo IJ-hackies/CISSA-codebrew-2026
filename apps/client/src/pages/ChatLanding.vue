@@ -8,6 +8,7 @@ import { useIsMobile } from '@/composables/useIsMobile'
 import { useVisualViewport } from '@/composables/useVisualViewport'
 import {
   addRecentGalaxy,
+  type GalaxyEntry,
 } from '@/lib/recentGalaxies'
 import { createGalaxy, fetchGalaxyEnvelope, type GalaxyJobStatus } from '@/lib/meshApi'
 
@@ -223,10 +224,25 @@ const MIN_CRUISE_MS = 2500
 const POLL_INTERVAL_MS = 2500
 
 let _lastPolledStage: GalaxyJobStatus | null = null
+let _cancelled = false
+
+class CancelError extends Error { constructor() { super('cancelled') } }
+
+function cancelLaunch() {
+  _cancelled = true
+  stopStatusCycle()
+  const renderer = galaxyRendererRef.value?.getRenderer()
+  renderer?.abortLaunch()
+  launching.value = false
+  transitioning.value = false
+  router.push('/')
+}
 
 async function waitForRenderableGalaxy(id: string) {
   for (;;) {
+    if (_cancelled) throw new CancelError()
     const envelope = await fetchGalaxyEnvelope(id)
+    if (_cancelled) throw new CancelError()
     // Only restart the cycle when the stage actually changes
     if (envelope.status !== _lastPolledStage) {
       _lastPolledStage = envelope.status
@@ -296,6 +312,7 @@ async function handleSubmit() {
     // Fade to black before the route switch so there's no hard cut.
     transitioning.value = true
     await new Promise((r) => setTimeout(r, 450))
+    if (_cancelled) return
 
     const entry: GalaxyEntry = {
       uuid: galaxy.id,
@@ -313,6 +330,7 @@ async function handleSubmit() {
       })
       .catch((e) => console.error('[chat-landing] router.push threw:', e))
   } catch (err) {
+    if (err instanceof CancelError) return
     const message = err instanceof Error ? err.message : String(err)
     console.error('[chat-landing] launch failed:', message)
     stopStatusCycle()
@@ -334,6 +352,13 @@ async function handleSubmit() {
     <div class="launch-status" :class="{ visible: launching && !transitioning }">
       <span class="launch-status-text" :class="{ fading: statusFading }">{{ statusMessage }}</span><span class="launch-status-dots" aria-hidden="true">...</span>
     </div>
+
+    <!-- Cancel button — appears after a short delay so it doesn't flash on fast connections -->
+    <button
+      class="cancel-launch-btn"
+      :class="{ visible: launching && !transitioning }"
+      @click="cancelLaunch"
+    >Cancel</button>
 
     <!-- Nebula blobs -->
     <div class="nebula nebula-1" />
@@ -839,6 +864,39 @@ async function handleSubmit() {
 }
 .launch-status.visible {
   opacity: 1;
+}
+
+/* Cancel button — sits just below the status pill */
+.cancel-launch-btn {
+  position: fixed;
+  bottom: calc(28% - 52px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 22;
+  height: 34px;
+  padding: 0 20px;
+  font-family: var(--font-ui);
+  font-size: 0.70rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: rgba(245,240,234,0.45);
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 999px;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: color 180ms, border-color 180ms, background 180ms, opacity 600ms ease;
+  transition-delay: 0s, 0s, 0s, 1.5s;
+}
+.cancel-launch-btn.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.cancel-launch-btn:hover {
+  color: rgba(245,240,234,0.85);
+  border-color: rgba(255,255,255,0.22);
+  background: rgba(255,255,255,0.05);
 }
 
 /* Text fades on message swap */

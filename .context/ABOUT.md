@@ -77,6 +77,19 @@ The galaxy is a Three.js scene with a force-directed layout. Solar systems appea
 - `apps/server-gemini/` — active Bun + Hono backend used by the frontend
 - `packages/shared/` — Shared TypeScript types
 
+## The Taco (Public Gallery)
+
+Galaxies can be published to **The Taco** — a public discovery feed. Publishing requires an owner token (stored in `localStorage` at creation). Each published galaxy has a tagline. The Taco tab on `TacoDashboard` lists all public galaxies with sort (newest / most planets / A→Z) and search. Unpublishing removes the galaxy from the feed immediately.
+
+## Frontend Caching
+
+`lib/dataCache.ts` is a singleton cache module that:
+- Hydrates from `localStorage` (5-min TTL) on import — zero-wait render on return visits
+- Kicks off network fetches in the background via `prefetchAll()` called in `App.vue` `onMounted` — data is in-flight before any page component mounts
+- Prefetches submissions for the 8 most recent complete galaxies after the list loads
+- Deduplicates in-flight requests; skips refetch within 2 min of last fetch (within-session navigation)
+- `syncGalaxyListCache()` must be called after any local mutation to keep localStorage consistent
+
 ## Integration Status
 
 - The frontend is now linked directly to `apps/server-gemini/`.

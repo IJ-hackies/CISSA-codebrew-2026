@@ -42,6 +42,7 @@ import {
   writeConcept,
   writeStory,
 } from "../workspace/write";
+import { updateGalaxyTitle } from "../db/client";
 import { updateGalaxyStatus } from "../db/client";
 import type { SourceRow } from "../db/client";
 import type {
@@ -494,9 +495,15 @@ export async function runOneShotPipeline(
     }),
   }));
 
+  // Write the AI-generated title back to the DB so the dashboard reflects it
+  // instead of "Untitled" (or whatever filename was passed as a hint).
+  const solarSystemTitle = result.galaxyTitle;
+  ctx.galaxyTitle = solarSystemTitle;
+  updateGalaxyTitle(ctx.galaxyId, solarSystemTitle);
+
   const solarSystemCtx: SolarSystemCtx = {
     id: randomUUID(),
-    title: result.galaxyTitle,
+    title: solarSystemTitle,
     oneLineDescription: result.oneLineDescription,
     sourceIds: sourceIdList,
     body: result.solarSystemBody,

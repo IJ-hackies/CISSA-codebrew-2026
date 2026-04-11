@@ -32,56 +32,6 @@ const rocketBtnRef = ref<HTMLButtonElement | null>(null)
 const inputBoxRef = ref<HTMLDivElement | null>(null)
 const error = ref<string | null>(null)
 
-// ── Custom resize grip ───────────────────────────────────────────────────
-// Incremental-delta approach: each mousemove applies only the delta since the
-// last event. This is immune to layout reflow (e.g. a centred flex container
-// shifting upward as the textarea grows) because we never compare against a
-// fixed start position — we only ever add the per-frame step.
-let lastDragY = 0
-
-function startResize(e: MouseEvent) {
-  const el = textareaRef.value
-  if (!el) return
-  e.preventDefault()
-  lastDragY = e.clientY
-  // Ensure el.style.height is set so onResizeMove always has a numeric base.
-  if (!el.style.height) {
-    const cs = getComputedStyle(el)
-    el.style.height = cs.boxSizing === 'border-box'
-      ? `${el.offsetHeight}px`
-      : `${el.offsetHeight
-          - parseFloat(cs.paddingTop)   - parseFloat(cs.paddingBottom)
-          - parseFloat(cs.borderTopWidth) - parseFloat(cs.borderBottomWidth)}px`
-  }
-  manuallyResized.value = true
-  document.addEventListener('mousemove', onResizeMove)
-  document.addEventListener('mouseup', stopResize)
-  document.body.style.userSelect = 'none'
-  document.body.style.cursor = 'ns-resize'
-}
-
-function onResizeMove(e: MouseEvent) {
-  const el = textareaRef.value
-  if (!el) return
-  const delta = e.clientY - lastDragY
-  lastDragY = e.clientY
-  const cs = getComputedStyle(el)
-  const minH = parseFloat(cs.minHeight) || 64
-  const maxH = window.innerHeight * 0.4
-  const current = parseFloat(el.style.height)
-  // The stage uses justify-content:center — growing the textarea by X shifts
-  // the whole block up by X/2, so the grip only moves X/2. Applying delta*2
-  // makes the grip move exactly delta, keeping it locked under the cursor.
-  el.style.height = `${Math.min(maxH, Math.max(minH, current + delta * 2))}px`
-}
-
-function stopResize() {
-  document.removeEventListener('mousemove', onResizeMove)
-  document.removeEventListener('mouseup', stopResize)
-  document.body.style.userSelect = ''
-  document.body.style.cursor = ''
-}
-
 const totalBytes = computed(() => props.files.reduce((acc, f) => acc + f.size, 0))
 const overLimit = computed(() => totalBytes.value > TOTAL_SIZE_LIMIT_BYTES)
 const canSubmit = computed(
@@ -89,22 +39,11 @@ const canSubmit = computed(
 )
 
 // ── Auto-grow ────────────────────────────────────────────────────────────
-// Textarea grows with content up to its CSS max-height. If the user
-// manually drags the resize grip we stop auto-growing and let them drive,
-// until the textarea is emptied (then auto-grow re-engages).
-const manuallyResized = ref(false)
-/** Number of programmatic height changes that ResizeObserver hasn't seen yet. */
-let pendingProgrammaticResizes = 0
-
 function autoSize() {
   const el = textareaRef.value
-  if (!el || manuallyResized.value) return
-  // Reset to auto so scrollHeight reflects true content height.
-  pendingProgrammaticResizes++
+  if (!el) return
   el.style.height = 'auto'
-  // Force reflow so scrollHeight is correct after the auto reset.
   void el.offsetHeight
-  pendingProgrammaticResizes++
   el.style.height = `${el.scrollHeight}px`
 }
 
@@ -117,53 +56,16 @@ watch(
   () => props.modelValue,
   (v) => {
     if (v === '') {
-      // Reset manual override + collapse back to min-height.
-      manuallyResized.value = false
       const el = textareaRef.value
-      if (el) {
-        pendingProgrammaticResizes++
-        el.style.height = ''
-      }
+      if (el) el.style.height = ''
     } else {
       nextTick(autoSize)
     }
   },
 )
 
-let resizeObserver: ResizeObserver | null = null
-let lastObservedHeight = 0
-let observerPrimed = false
 onMounted(() => {
-  const el = textareaRef.value
-  if (!el) return
-  // Initial sizing in case there's already a value.
   nextTick(autoSize)
-  resizeObserver = new ResizeObserver((entries) => {
-    const h = entries[0]?.contentRect.height ?? 0
-    // Skip the first synthetic callback ResizeObserver fires on observe().
-    if (!observerPrimed) {
-      observerPrimed = true
-      lastObservedHeight = h
-      return
-    }
-    // Programmatic changes are debited one-by-one as the observer sees them.
-    if (pendingProgrammaticResizes > 0) {
-      pendingProgrammaticResizes--
-      lastObservedHeight = h
-      return
-    }
-    // Any unaccounted-for height change = user dragged the grip.
-    if (Math.abs(h - lastObservedHeight) > 0.5) {
-      manuallyResized.value = true
-    }
-    lastObservedHeight = h
-  })
-  resizeObserver.observe(el)
-})
-onBeforeUnmount(() => {
-  resizeObserver?.disconnect()
-  resizeObserver = null
-  stopResize()
 })
 
 function addFiles(incoming: File[]) {
@@ -253,8 +155,6 @@ defineExpose({
         placeholder="Describe a memory, a chapter of your life, or a time you want to preserve…"
         spellcheck="false"
       />
-      <div v-if="!mobile" class="resize-grip" @mousedown="startResize" />
-
       <div class="actions">
         <button
           type="button"
@@ -434,30 +334,6 @@ textarea::-webkit-scrollbar-thumb {
   border-radius: 999px;
   border: 1px solid rgba(255, 181, 71, 0.15);
 }
-.resize-grip {
-  position: absolute;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 36px;
-  height: 14px;
-  cursor: ns-resize;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.resize-grip::before {
-  content: '';
-  display: block;
-  width: 28px;
-  height: 3px;
-  border-radius: 2px;
-  background: rgba(255, 181, 71, 0.18);
-  transition: background 200ms ease;
-}
-.resize-grip:hover::before {
-  background: rgba(255, 181, 71, 0.45);
-}
 textarea::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(
     180deg,
@@ -590,7 +466,6 @@ textarea::-webkit-scrollbar-thumb:hover {
   padding: 2px 6px 0 6px;
 }
 .input-shell.mobile textarea {
-  resize: none;
   font-size: 0.95rem;
   line-height: 1.4;
   padding: 10px 16px 8px 16px;

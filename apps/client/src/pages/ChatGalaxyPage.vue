@@ -1,23 +1,32 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import GalaxyRenderer from '@/components/GalaxyRenderer.vue'
 import ConstellationGlyph from '@/components/ConstellationGlyph.vue'
 import ChatInput from '@/components/ChatInput.vue'
 import DropOverlay from '@/components/DropOverlay.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 import {
-  fetchGalaxyEnvelope,
-  fetchSubmissions,
+  publishToTaco,
+  unpublishFromTaco,
+  updateTacoTagline,
+  isOwner,
   type GalaxyEnvelope,
   type Submission,
 } from '@/lib/meshApi'
+import {
+  getCachedEnvelope,
+  fetchEnvelopeCached,
+  getCachedSubmissions,
+  fetchSubmissionsCached,
+} from '@/lib/dataCache'
 import { useMeshStore } from '@/lib/meshStore'
 import { setPendingAppend } from '@/lib/pendingAppend'
 
 const route = useRoute()
 const router = useRouter()
 const isMobile = useIsMobile()
-const { clear: clearMeshStore } = useMeshStore()
+const { clear: clearMeshStore, loadFromApi: preloadGalaxy } = useMeshStore()
 
 const galaxyId = computed(() => route.params.id as string)
 
@@ -28,7 +37,12 @@ const files = ref<File[]>([])
 const submitting = ref(false)
 const submitError = ref<string | null>(null)
 const dropVisible = ref(false)
-const loading = ref(true)
+const envelopeLoading = ref(true)
+const subsLoading = ref(true)
+
+// Title is seeded from router navigation state (passed by TacoDashboard)
+// so it's available instantly before the envelope resolves.
+const titleFromNav = (window.history.state?.title as string | undefined) ?? ''
 
 
 const POLL_INTERVAL_MS = 2500
@@ -56,17 +70,36 @@ const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 
 // ── Load galaxy + submissions ──────────────────────────────────────
 async function loadData() {
+  const id = galaxyId.value
+
+  // Seed from cache for instant render — no waiting for the network.
+  const cachedEnv = getCachedEnvelope(id)
+  if (cachedEnv) {
+    envelope.value = cachedEnv
+    envelopeLoading.value = false
+  }
+  const cachedSubs = getCachedSubmissions(id)
+  if (cachedSubs) {
+    submissions.value = cachedSubs
+    subsLoading.value = false
+  }
+
+  // Fetch fresh envelope (updates silently if cache was warm).
   try {
-    const [env, subs] = await Promise.all([
-      fetchGalaxyEnvelope(galaxyId.value),
-      fetchSubmissions(galaxyId.value),
-    ])
-    envelope.value = env
-    submissions.value = subs
+    envelope.value = await fetchEnvelopeCached(id)
   } catch (err) {
-    console.error('[chat-galaxy] load failed:', err)
+    console.error('[chat-galaxy] envelope load failed:', err)
   } finally {
-    loading.value = false
+    envelopeLoading.value = false
+  }
+
+  // Fetch fresh submissions.
+  try {
+    submissions.value = await fetchSubmissionsCached(id)
+  } catch (err) {
+    console.error('[chat-galaxy] submissions load failed:', err)
+  } finally {
+    subsLoading.value = false
   }
 }
 
@@ -91,6 +124,9 @@ onMounted(async () => {
   window.addEventListener('dragover', onDragOver)
   window.addEventListener('dragleave', onDragLeave)
   window.addEventListener('drop', onDrop)
+  // Pre-fetch the galaxy mesh in the background so clicking the glyph
+  // navigates into an already-loaded GalaxyView.
+  preloadGalaxy(galaxyId.value).catch(() => { /* silent — GalaxyView will retry */ })
   await loadData()
   if (envelope.value && envelope.value.status !== 'complete' && envelope.value.status !== 'error') {
     startPolling()
@@ -107,10 +143,10 @@ onBeforeUnmount(() => {
 })
 
 // ── Submit (append) ────────────────────────────────────────────────
-const galaxyTitle = computed(() => envelope.value?.title ?? '')
+const galaxyTitle = computed(() => envelope.value?.title ?? titleFromNav)
 const galaxyStatus = computed(() => envelope.value?.status ?? 'complete')
 // Don't show processing state while we're still loading initial data
-const isProcessing = computed(() => !loading.value && galaxyStatus.value !== 'complete' && galaxyStatus.value !== 'error')
+const isProcessing = computed(() => !envelopeLoading.value && galaxyStatus.value !== 'complete' && galaxyStatus.value !== 'error')
 
 const stageLabels: Record<string, string> = {
   queued: 'Queued…',
@@ -154,6 +190,74 @@ function formatDate(ts: number): string {
 function enterGalaxy() {
   router.push(`/galaxy/${galaxyId.value}`)
 }
+
+// ── Taco publish ───────────────────────────────────────────────────
+const isPublic = computed(() => envelope.value?.isPublic ?? false)
+const tacoModalOpen = ref(false)
+const tacoTagline = ref('')
+const tacoError = ref('')
+const tacoSaving = ref(false)
+const isEditingTagline = computed(() => isPublic.value)
+
+function openTacoModal() {
+  tacoTagline.value = envelope.value?.tagline ?? ''
+  tacoError.value = ''
+  tacoModalOpen.value = true
+}
+function closeTacoModal() {
+  tacoModalOpen.value = false
+  tacoTagline.value = ''
+  tacoError.value = ''
+}
+
+async function submitTaco() {
+  if (tacoSaving.value) return
+  if (!isOwner(galaxyId.value)) {
+    tacoError.value = 'This galaxy was created before sharing was enabled. Create a new galaxy to share it.'
+    return
+  }
+  tacoSaving.value = true
+  tacoError.value = ''
+  try {
+    if (isEditingTagline.value) {
+      await updateTacoTagline(galaxyId.value, tacoTagline.value)
+    } else {
+      await publishToTaco(galaxyId.value, tacoTagline.value)
+    }
+    if (envelope.value) {
+      envelope.value = { ...envelope.value, isPublic: true, tagline: tacoTagline.value.trim() }
+    }
+    closeTacoModal()
+  } catch (err) {
+    tacoError.value = err instanceof Error ? err.message : 'Failed to publish'
+  } finally {
+    tacoSaving.value = false
+  }
+}
+
+function navigateBack() {
+  router.push('/')
+}
+
+const removeConfirmOpen = ref(false)
+const removePhase = ref<'idle' | 'removing' | 'removed'>('idle')
+
+async function removefromTaco() {
+  if (removePhase.value !== 'idle') return
+  removePhase.value = 'removing'
+  try {
+    await unpublishFromTaco(galaxyId.value)
+    if (envelope.value) envelope.value = { ...envelope.value, isPublic: false }
+    removePhase.value = 'removed'
+    setTimeout(() => {
+      removeConfirmOpen.value = false
+      removePhase.value = 'idle'
+    }, 1200)
+  } catch (err) {
+    console.error('[chat-galaxy] unpublish failed:', err)
+    removePhase.value = 'idle'
+  }
+}
 </script>
 
 <template>
@@ -165,6 +269,8 @@ function enterGalaxy() {
     @dragleave.prevent
     @drop.prevent
   >
+    <!-- Starfield canvas -->
+    <GalaxyRenderer />
     <!-- Background -->
     <div class="nebula nebula-1" />
     <div class="nebula nebula-2" />
@@ -173,35 +279,15 @@ function enterGalaxy() {
     <div class="vignette" />
 
     <!-- Back to Taco -->
-    <button class="back-btn" @click="router.push('/')" aria-label="Back to dashboard">
+    <button class="back-btn" @click="navigateBack" aria-label="Back to dashboard">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
         <path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <span class="back-label">Dashboard</span>
     </button>
 
-    <!-- Loading skeleton -->
-    <div v-if="loading" class="content">
-      <div class="portal-section">
-        <div class="skel skel-circle" />
-        <div class="skel-meta">
-          <div class="skel skel-bar skel-title" />
-          <div class="skel skel-bar skel-hint" />
-        </div>
-      </div>
-      <div class="section-divider">
-        <span class="divider-label">Add more content</span>
-      </div>
-      <div class="skel skel-input" />
-      <div class="skel-log">
-        <div class="skel skel-bar skel-log-header" />
-        <div class="skel skel-entry" />
-        <div class="skel skel-entry" />
-      </div>
-    </div>
-
-    <!-- Content -->
-    <div v-else class="content">
+    <!-- Content (rendered immediately — glyph only needs the UUID from route) -->
+    <div class="content">
 
       <!-- Galaxy portal -->
       <div class="portal-section">
@@ -222,6 +308,26 @@ function enterGalaxy() {
           <span class="galaxy-hint" v-if="!isProcessing">Click to explore 3D galaxy</span>
           <span class="galaxy-hint processing" v-else>{{ statusLabel }}</span>
         </div>
+      </div>
+
+      <!-- Taco share row -->
+      <div v-if="!envelopeLoading && !isProcessing" class="taco-row">
+        <template v-if="!isPublic">
+          <button class="taco-share-btn" @click="openTacoModal">
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+              <circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" stroke-width="1.2"/>
+              <path d="M6.5 3.5v6M3.5 6.5h6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            </svg>
+            Share to The Taco
+          </button>
+        </template>
+        <template v-else>
+          <div class="taco-published-row">
+            <span class="taco-published-label">In The Taco</span>
+            <button class="taco-edit-btn" @click="openTacoModal">Edit tagline</button>
+            <button class="taco-remove-btn" @click="removeConfirmOpen = true">Remove</button>
+          </div>
+        </template>
       </div>
 
       <!-- Divider -->
@@ -246,13 +352,16 @@ function enterGalaxy() {
       </div>
 
       <!-- Submission log -->
-      <div v-if="submissions.length > 0" class="submission-log">
+      <div v-if="subsLoading" class="subs-loading-row">
+        <div class="subs-dot" /><div class="subs-dot" /><div class="subs-dot" />
+      </div>
+      <div v-else-if="submissions.length > 0" class="submission-log">
         <div class="log-header">
           <span class="log-label">CONTENT ADDED</span>
           <span class="log-count">{{ submissions.length }} submission{{ submissions.length === 1 ? '' : 's' }}</span>
         </div>
         <div class="log-entries">
-          <div v-for="sub in submissions" :key="sub.id" class="log-entry">
+          <div v-for="sub in [...submissions].reverse()" :key="sub.id" class="log-entry">
             <div class="log-entry-time">{{ formatDate(sub.createdAt) }}</div>
             <div class="log-entry-content">
               <span v-if="sub.text" class="log-text">{{ sub.text.slice(0, 120) }}{{ sub.text.length > 120 ? '…' : '' }}</span>
@@ -275,6 +384,61 @@ function enterGalaxy() {
     </div>
 
     <DropOverlay :visible="dropVisible" />
+
+    <!-- Taco remove confirm -->
+    <Transition name="dialog-fade">
+      <div v-if="removeConfirmOpen" class="dialog-backdrop" @click.self="removePhase === 'idle' && (removeConfirmOpen = false)">
+        <div class="dialog">
+          <p class="dialog-title">
+            {{ removePhase === 'removed' ? 'Removed from The Taco' : 'Remove from The Taco?' }}
+          </p>
+          <p class="dialog-body">
+            {{ removePhase === 'removed'
+              ? 'Your galaxy has been removed from the public gallery.'
+              : 'This galaxy will no longer appear in the public gallery. You can re-publish it any time.' }}
+          </p>
+          <div v-if="removePhase === 'idle'" class="dialog-actions">
+            <button class="dialog-btn cancel" @click="removeConfirmOpen = false">Cancel</button>
+            <button class="dialog-btn confirm" @click="removefromTaco">Remove</button>
+          </div>
+          <div v-else class="dialog-actions">
+            <button class="dialog-btn cancel" disabled>
+              {{ removePhase === 'removing' ? 'Removing…' : 'Removed' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- Taco publish modal -->
+    <Transition name="dialog-fade">
+      <div v-if="tacoModalOpen" class="dialog-backdrop" @click.self="closeTacoModal">
+        <div class="dialog">
+          <p class="dialog-title">{{ isEditingTagline ? 'Edit tagline' : 'Share to The Taco' }}</p>
+          <p v-if="!isEditingTagline" class="dialog-body">Write a short tagline so others know what to expect.</p>
+          <textarea
+            v-model="tacoTagline"
+            class="tagline-input"
+            placeholder="A journey through…"
+            maxlength="280"
+            rows="3"
+            @keydown.enter.ctrl="submitTaco"
+          />
+          <p class="tagline-count">{{ tacoTagline.length }}/280</p>
+          <p v-if="tacoError" class="dialog-error">{{ tacoError }}</p>
+          <div class="dialog-actions">
+            <button class="dialog-btn cancel" @click="closeTacoModal">Cancel</button>
+            <button
+              class="dialog-btn publish"
+              :disabled="tacoSaving || !tacoTagline.trim()"
+              @click="submitTaco"
+            >
+              {{ tacoSaving ? 'Saving…' : isEditingTagline ? 'Save' : 'Publish' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </main>
 </template>
 
@@ -373,8 +537,8 @@ function enterGalaxy() {
   align-items: center;
   justify-content: center;
   width: 200px; height: 200px;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.09);
+  border: 1px solid rgba(255,255,255,0.22);
   border-radius: 50%;
   cursor: pointer;
   transition: background 250ms ease, border-color 250ms ease, transform 250ms ease;
@@ -477,6 +641,13 @@ function enterGalaxy() {
   margin-right: 3px;
 }
 
+/* ── Submissions loading dots ────────────────────────────────────── */
+.subs-loading-row { display: flex; justify-content: center; gap: 8px; padding: 28px 0; }
+.subs-dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,181,71,0.9); animation: subsDotPulse 1.4s ease-in-out infinite; }
+.subs-dot:nth-child(2) { animation-delay: 0.2s; }
+.subs-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes subsDotPulse { 0%,80%,100% { opacity:0.25; transform:scale(0.7); } 40% { opacity:1; transform:scale(1.2); } }
+
 /* ── Submission log ──────────────────────────────────────────────── */
 .submission-log {
   display: flex;
@@ -504,7 +675,7 @@ function enterGalaxy() {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  border: 1px solid rgba(255,255,255,0.14);
+  border: 1px solid rgba(255,255,255,0.18);
   border-radius: 12px;
   overflow: hidden;
 }
@@ -513,8 +684,8 @@ function enterGalaxy() {
   gap: 20px;
   align-items: flex-start;
   padding: 16px 20px;
-  background: rgba(255,255,255,0.05);
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.10);
+  border-bottom: 1px solid rgba(255,255,255,0.10);
 }
 .log-entry:last-child { border-bottom: none; }
 .log-entry-time {
@@ -554,61 +725,98 @@ function enterGalaxy() {
   padding: 3px 10px;
 }
 
-/* ── Loading skeleton ────────────────────────────────────────────── */
-@keyframes shimmer {
-  0%   { background-position: -400px 0; }
-  100% { background-position:  400px 0; }
+
+
+/* ── Taco share row ──────────────────────────────────────────────── */
+.taco-row {
+  display: flex;
+  justify-content: center;
+  margin-top: -20px;
 }
-.skel {
-  background: linear-gradient(
-    90deg,
-    rgba(255,255,255,0.04) 25%,
-    rgba(255,255,255,0.09) 50%,
-    rgba(255,255,255,0.04) 75%
-  );
-  background-size: 800px 100%;
-  animation: shimmer 1.6s ease-in-out infinite;
-  border-radius: 8px;
+
+.taco-share-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 36px; padding: 0 18px;
+  font-family: var(--font-ui, sans-serif); font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em;
+  color: rgba(245,240,234,0.75);
+  background: rgba(255,181,71,0.08);
+  border: 1px solid rgba(255,181,71,0.22);
+  border-radius: 100px;
+  cursor: pointer;
+  transition: background 180ms, border-color 180ms, color 180ms;
 }
-.skel-circle {
-  width: 200px; height: 200px;
+.taco-share-btn:hover { background: rgba(255,181,71,0.16); border-color: rgba(255,181,71,0.4); color: #f5f0ea; }
+
+.taco-published-row {
+  display: inline-flex; align-items: center; gap: 10px;
+  height: 36px; padding: 0 16px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 100px;
+}
+.taco-published-label {
+  font-family: var(--font-ui, sans-serif); font-size: 0.68rem; font-weight: 600; letter-spacing: 0.06em;
+  color: rgba(255,181,71,0.8);
+}
+.taco-published-row::before {
+  content: '';
+  display: inline-block;
+  width: 6px; height: 6px;
   border-radius: 50%;
+  background: rgba(255,181,71,0.6);
   flex-shrink: 0;
 }
-.skel-meta {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
+.taco-edit-btn, .taco-remove-btn {
+  font-family: var(--font-ui, sans-serif); font-size: 0.68rem; font-weight: 500;
+  background: none; border: none; cursor: pointer;
+  padding: 0; transition: color 160ms;
 }
-.skel-bar {
-  height: 14px;
-  border-radius: 6px;
+.taco-edit-btn { color: rgba(245,240,234,0.5); }
+.taco-edit-btn:hover { color: rgba(245,240,234,0.85); }
+.taco-remove-btn { color: rgba(255,100,100,0.5); }
+.taco-remove-btn:hover { color: rgba(255,100,100,0.85); }
+
+/* ── Taco modal ───────────────────────────────────────────────────── */
+.dialog-backdrop {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(2,4,10,0.75); backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
 }
-.skel-title { width: 180px; height: 22px; }
-.skel-hint  { width: 130px; height: 12px; opacity: 0.6; }
-.skel-input { height: 80px; width: 100%; border-radius: 12px; }
-.skel-log {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.dialog {
+  background: #0d1120; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px;
+  padding: 28px 28px 24px; max-width: 380px; width: 100%;
+  display: flex; flex-direction: column; gap: 10px;
 }
-.skel-log-header { width: 120px; height: 11px; margin-bottom: 10px; opacity: 0.5; }
-.skel-entry {
-  height: 52px;
-  border-radius: 0;
-  background: linear-gradient(
-    90deg,
-    rgba(255,255,255,0.03) 25%,
-    rgba(255,255,255,0.07) 50%,
-    rgba(255,255,255,0.03) 75%
-  );
-  background-size: 800px 100%;
-  animation: shimmer 1.6s ease-in-out infinite;
+.dialog-title { font-family: var(--font-body, serif); font-size: 1rem; font-weight: 500; color: #f5f0ea; margin: 0; }
+.dialog-body { font-family: var(--font-ui, sans-serif); font-size: 0.78rem; color: rgba(245,240,234,0.45); line-height: 1.5; margin: 0; }
+.dialog-error { font-family: var(--font-ui, sans-serif); font-size: 0.72rem; color: #ff8a8a; margin: 0; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.dialog-btn {
+  height: 36px; padding: 0 18px;
+  font-family: var(--font-ui, sans-serif); font-size: 0.72rem; font-weight: 600;
+  border-radius: 100px; cursor: pointer; transition: background 180ms, border-color 180ms, color 180ms;
 }
-.skel-entry:first-of-type { border-radius: 10px 10px 0 0; }
-.skel-entry:last-of-type  { border-radius: 0 0 10px 10px; }
+.dialog-btn.cancel { color: rgba(245,240,234,0.55); background: transparent; border: 1px solid rgba(255,255,255,0.1); }
+.dialog-btn.cancel:hover { color: rgba(245,240,234,0.85); border-color: rgba(255,255,255,0.2); }
+.dialog-btn.publish { color: #fff; background: rgba(255,181,71,0.2); border: 1px solid rgba(255,181,71,0.4); }
+.dialog-btn.publish:hover:not(:disabled) { background: rgba(255,181,71,0.35); }
+.dialog-btn.publish:disabled { opacity: 0.4; cursor: default; }
+.dialog-btn.confirm { color: #fff; background: rgba(200,50,50,0.75); border: 1px solid rgba(220,60,60,0.4); }
+.dialog-btn.confirm:hover { background: rgba(220,60,60,0.9); }
+
+.tagline-input {
+  width: 100%; padding: 10px 12px;
+  font-family: var(--font-ui, sans-serif); font-size: 0.8rem; line-height: 1.5;
+  color: #f5f0ea; background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12); border-radius: 10px;
+  resize: none; outline: none; transition: border-color 180ms; box-sizing: border-box;
+}
+.tagline-input:focus { border-color: rgba(255,255,255,0.25); }
+.tagline-input::placeholder { color: rgba(245,240,234,0.3); }
+.tagline-count { font-family: var(--font-ui, sans-serif); font-size: 0.65rem; color: rgba(245,240,234,0.25); text-align: right; margin: -4px 0 0; }
+
+.dialog-fade-enter-active, .dialog-fade-leave-active { transition: opacity 180ms ease; }
+.dialog-fade-enter-from, .dialog-fade-leave-to { opacity: 0; }
 
 /* ── Mobile ─────────────────────────────────────────────────────── */
 @media (max-width: 640px) {

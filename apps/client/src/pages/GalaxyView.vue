@@ -74,7 +74,7 @@
         </svg>
         <span class="nav-pill-label">Home</span>
       </button>
-      <button class="nav-pill" @click="router.push(`/galaxy/${route.params.id}/chat`)" aria-label="Chat">
+      <button v-if="!isTacoView" class="nav-pill" @click="router.push(`/galaxy/${route.params.id}/chat`)" aria-label="Chat">
         <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
           <path d="M2 2h11v9H8l-3 2V11H2V2z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -101,7 +101,7 @@
             </svg>
             Home
           </button>
-          <button class="nav-drop-item" @click="router.push(`/galaxy/${route.params.id}/chat`); menuOpen = false">
+          <button v-if="!isTacoView" class="nav-drop-item" @click="router.push(`/galaxy/${route.params.id}/chat`); menuOpen = false">
             <svg width="14" height="14" viewBox="0 0 15 15" fill="none">
               <path d="M2 2h11v9H8l-3 2V11H2V2z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
@@ -117,7 +117,7 @@
       ref="storyReaderRef"
       :stories="meshData.stories"
       :galaxy-data="meshData"
-      :trigger-top="isMobile ? 22 : 104"
+      :trigger-top="isMobile ? 22 : isTacoView ? 62 : 104"
       @visit-planet="onStoryVisitPlanet"
       @navigate-to-planet="onStoryNavigateToPlanet"
       @open-story="onStoryOpenStory"
@@ -166,6 +166,7 @@ import type { UUID } from '@/lib/meshApi'
 const router = useRouter()
 const route  = useRoute()
 const isMobile = useIsMobile()
+const isTacoView = computed(() => route.query.source === 'taco')
 const { data: meshData, galaxyId, visitedPlanetIds, collectedConceptIds, loadFromApi, getOrGenerateSystemPreset, collectConcept, isConceptCollected } = useMeshStore()
 
 // ── Mobile nav menu ───────────────────────────────────────────────────────────
@@ -1013,6 +1014,7 @@ function enterSystem(
         if (openPlanetId) query.openPlanet = openPlanetId
         if (fromStory)    query.fromStory = fromStory
         if (storyScene)   query.storyScene = storyScene
+        if (isTacoView.value) query.source = 'taco'
         router.push({
           name: 'solar-system',
           params: { id: (route.params.id as string) ?? 'demo', clusterId: systemId },
