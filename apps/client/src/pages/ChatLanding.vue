@@ -25,6 +25,7 @@ useVisualViewport()
 const text = ref('')
 const files = ref<File[]>([])
 const launching = ref(false)
+const transitioning = ref(false)  // true during the fade-to-black before route switch
 const launchError = ref<string | null>(null)
 const dropVisible = ref(false)
 const recents = ref<GalaxyEntry[]>(listRecentGalaxies())
@@ -216,6 +217,10 @@ async function handleSubmit() {
       await renderer.landRocket()
     }
 
+    // Fade to black before the route switch so there's no hard cut.
+    transitioning.value = true
+    await new Promise((r) => setTimeout(r, 450))
+
     // Store the full blob so GalaxyMap can read it without re-fetching.
     if (galaxy) setGalaxy(galaxy as Galaxy)
 
@@ -252,6 +257,8 @@ async function handleSubmit() {
 <template>
   <main class="page" :class="{ mobile: isMobile }">
     <GalaxyRenderer ref="galaxyRendererRef" />
+    <!-- Fade-to-black veil that fires after rocket lands, before route switch -->
+    <div class="transition-veil" :class="{ active: transitioning }" />
 
     <!-- Nebula blobs -->
     <div class="nebula nebula-1" />
@@ -425,6 +432,20 @@ async function handleSubmit() {
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
   background-repeat: repeat;
   background-size: 180px 180px;
+}
+
+/* Fade-to-black before route transition */
+.transition-veil {
+  position: fixed;
+  inset: 0;
+  background: #02040a;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 50;
+  transition: opacity 450ms ease-in;
+}
+.transition-veil.active {
+  opacity: 1;
 }
 
 /* Edge vignette */

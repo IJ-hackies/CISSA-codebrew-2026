@@ -634,14 +634,28 @@ export class GalaxyRenderer implements RendererPublicAPI {
 
     // ── Rocket position + rotation (single spiral system) ──────────────────
     if (this.rocket.active) {
+      const prevX = this.rocket.x
+      const prevY = this.rocket.y
       this.spiral.angle += this.spiral.angularSpeed * dt
       const cosA = Math.cos(this.spiral.angle)
       const sinA = Math.sin(this.spiral.angle)
       this.rocket.x = this.vp.x + cosA * this.spiral.radius
       this.rocket.y = this.vp.y + sinA * this.spiral.radius
-      // Velocity for negative ω: (sinθ·|ω|·r, -cosθ·|ω|·r).
-      // Nose follows the velocity direction.
-      this.rocket.rotation = Math.atan2(-cosA, sinA)
+      if (this.phase === 'land') {
+        // Point directly toward VP so the rocket noses cleanly into the center.
+        const tx = this.vp.x - this.rocket.x
+        const ty = this.vp.y - this.rocket.y
+        if (tx * tx + ty * ty > 1e-6) {
+          this.rocket.rotation = Math.atan2(ty, tx)
+        }
+      } else {
+        // Face the direction of travel (tangential during orbit).
+        const dx = this.rocket.x - prevX
+        const dy = this.rocket.y - prevY
+        if (dx * dx + dy * dy > 1e-6) {
+          this.rocket.rotation = Math.atan2(dy, dx)
+        }
+      }
     }
 
     // Faster slow drift on nebulae — adds ambient life.
