@@ -50,11 +50,15 @@ export interface InputBudget {
 // The `model` field is a global default for every staged Pro call on that
 // tier — Flash for tiny/small (Pro's edge is wasted on a couple pages),
 // Pro for medium/large where quality matters.
+//
+// solarSystems ranges were widened in 2026-04-12 after segmentation-during-
+// ingest landed — a single large PDF now fans out into multiple virtual
+// sources, so even "small" tier uploads deserve 2+ systems.
 const TIERS: Record<Tier, Omit<InputBudget, "sourceCount" | "totalSourceChars">> = {
   tiny: {
     tier: "tiny",
     model: "flash",
-    solarSystems:         { min: 1, max: 1 },
+    solarSystems:         { min: 1, max: 2 },
     planetsPerSystem:     { min: 2, max: 4 },
     conceptsPerSystem:    { min: 1, max: 3 },
     stories:              { min: 1, max: 1 },
@@ -69,7 +73,7 @@ const TIERS: Record<Tier, Omit<InputBudget, "sourceCount" | "totalSourceChars">>
   small: {
     tier: "small",
     model: "flash",
-    solarSystems:         { min: 1, max: 2 },
+    solarSystems:         { min: 2, max: 4 },
     planetsPerSystem:     { min: 3, max: 6 },
     conceptsPerSystem:    { min: 2, max: 4 },
     stories:              { min: 1, max: 2 },
@@ -84,7 +88,7 @@ const TIERS: Record<Tier, Omit<InputBudget, "sourceCount" | "totalSourceChars">>
   medium: {
     tier: "medium",
     model: "pro",
-    solarSystems:         { min: 2, max: 5 },
+    solarSystems:         { min: 3, max: 6 },
     planetsPerSystem:     { min: 5, max: 8 },
     conceptsPerSystem:    { min: 3, max: 5 },
     stories:              { min: 2, max: 4 },
@@ -113,11 +117,18 @@ const TIERS: Record<Tier, Omit<InputBudget, "sourceCount" | "totalSourceChars">>
   },
 };
 
-export function computeInputBudget(ctx: PipelineContext): InputBudget {
+// totalInputBytes is the raw on-disk size of the uploaded source files
+// (NOT summary length — summaries compress a 50-page PDF into ~1KB of
+// text and would mis-tier the galaxy into "tiny"). Callers compute it
+// from SourceRow.byteSize in runStagedPipeline and thread it in.
+export function computeInputBudget(
+  ctx: PipelineContext,
+  totalInputBytes: number,
+): InputBudget {
   const sourceCount = ctx.sources.length;
   const totalSourceChars = ctx.sources.reduce((n, s) => n + s.summary.length, 0);
 
-  const tier = pickTier(sourceCount, totalSourceChars);
+  const tier = pickTier(sourceCount, totalInputBytes);
   return {
     ...TIERS[tier],
     sourceCount,
@@ -140,13 +151,18 @@ export function budgetForTier(
   };
 }
 
-// Tier by the tighter of (count, chars) — a 2-source upload of 200KB of
-// summary is "medium", not "tiny". Thresholds are picked so the 500-file
-// test (which lands in "large") matches pre-pivot behavior exactly.
-function pickTier(count: number, chars: number): Tier {
-  if (count <= 3  && chars <  6_000)  return "tiny";
-  if (count <= 15 && chars < 40_000)  return "small";
-  if (count <= 80 && chars < 250_000) return "medium";
+// Tier by raw INPUT BYTES (not summary length). The previous version
+// used summary.length which is a terrible proxy — a 50-page PDF summarizes
+// down to ~1KB of text and used to land in "tiny" regardless of its
+// actual content weight. Bytes is the honest signal.
+//
+// count is the post-segmentation virtual source count (long files have
+// already fanned out into multiple ctx.sources entries by the time this
+// runs), so an N-segment PDF counts as N here.
+function pickTier(count: number, bytes: number): Tier {
+  if (count <= 2  && bytes <    20_000) return "tiny";
+  if (count <= 8  && bytes <   200_000) return "small";
+  if (count <= 30 && bytes < 1_500_000) return "medium";
   return "large";
 }
 

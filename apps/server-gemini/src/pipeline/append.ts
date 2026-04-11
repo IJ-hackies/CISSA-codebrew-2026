@@ -376,7 +376,8 @@ export async function runAppendPipeline(galaxyId: string): Promise<void> {
     await runIngestStage(ctx, newSourceRows);
     persist(galaxyId);
 
-    const budget = computeInputBudget(ctx);
+    const totalInputBytes = newSourceRows.reduce((n, r) => n + r.byteSize, 0);
+    const budget = computeInputBudget(ctx, totalInputBytes);
 
     // 2. Append decision
     setStage(galaxyId, "cluster", "deciding where new content fits");

@@ -1,9 +1,9 @@
 // Stage 1 — Ingest. For each uploaded source file, produce a structured
-// summary via Gemini and write a `(Source) Title.md` file to the mesh.
+// summary via Gemini and write `(Source) Title.md` file(s) to the mesh.
 // Files that are natively multimodal (PDFs, images) go through inlineData;
 // anything text-like is decoded and sent as a text part.
 //
-// Three improvements over the original fixed-concurrency design:
+// Four improvements over the original fixed-concurrency design:
 //
 //   1. MODEL TIERING — each file picks its model by mime + size:
 //        tiny text        → gemini-2.5-flash-lite  (cheapest/fastest)
@@ -19,6 +19,13 @@
 //   3. SIZE-PROPORTIONAL SUMMARY TARGETS — the prompt and maxOutputTokens
 //      scale with the file's own size, so a 1KB text file doesn't get a
 //      300-word novella summary with a 8192-token budget.
+//
+//   4. TOPIC SEGMENTATION — sources over a size threshold go through a
+//      segmented-summary call that returns 2-8 thematic segments instead
+//      of a single summary. Each segment becomes its own virtual SourceCtx
+//      (sharing parent filename/mediaRef), so the cluster stage sees real
+//      topic structure and can split a single hefty file across multiple
+//      solar systems. Short files stay on the single-summary path.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -76,6 +83,78 @@ const sourceSummaryJsonSchema = {
   },
 };
 
+// ── Segmented summary schema ───────────────────────────────────────
+// Long sources get a single call that returns N topic segments instead
+// of one summary. Each segment behaves like a standalone SourceCtx
+// downstream — the cluster stage partitions over segments, so a single
+// 50-page PDF covering five topics can fan out into five solar systems.
+
+const segmentedSummarySchema = z.object({
+  overallTitle: z.string().min(1).max(200),
+  tone: z.string().min(1).max(200),
+  segments: z
+    .array(
+      z.object({
+        title: z.string().min(1).max(200),
+        summary: z.string().min(30),
+        keyThemes: z.array(z.string()).min(1).max(8),
+        notableDetails: z.array(z.string()).max(6).default([]),
+      }),
+    )
+    .min(2)
+    .max(8),
+});
+
+const segmentedSummaryJsonSchema = {
+  type: "object",
+  required: ["overallTitle", "tone", "segments"],
+  properties: {
+    overallTitle: {
+      type: "string",
+      description: "Short descriptive title for the document as a whole (2-8 words).",
+    },
+    tone: {
+      type: "string",
+      description: "One short phrase describing the overall tone.",
+    },
+    segments: {
+      type: "array",
+      minItems: 2,
+      maxItems: 8,
+      description:
+        "2-8 thematic segments of the document. Each covers a DIFFERENT topic or section. Segments should partition the content — together they cover the whole document, but each one is tightly scoped to a single theme. Do not produce overlapping segments that restate the same material.",
+      items: {
+        type: "object",
+        required: ["title", "summary", "keyThemes", "notableDetails"],
+        properties: {
+          title: {
+            type: "string",
+            description:
+              "Specific topic title for this segment (2-6 words). Describes the segment's subject, not the whole document.",
+          },
+          summary: {
+            type: "string",
+            description:
+              "A focused summary of this segment only. Preserve concrete details (names, numbers, examples) from the segment's portion of the source.",
+          },
+          keyThemes: {
+            type: "array",
+            items: { type: "string" },
+            minItems: 1,
+            maxItems: 8,
+            description: "1-8 short theme phrases specific to this segment.",
+          },
+          notableDetails: {
+            type: "array",
+            items: { type: "string" },
+            maxItems: 6,
+          },
+        },
+      },
+    },
+  },
+};
+
 // ── Mime routing ────────────────────────────────────────────────────
 
 const TEXT_MIMES = new Set([
@@ -105,6 +184,41 @@ function pickModel(size: number, mime: string): string {
   // PDFs over ~2MB get the preview model's big input window.
   if (mime === "application/pdf" && size > 2 * 1024 * 1024) return MODEL_FLASH_PREVIEW;
   return MODEL_FLASH;
+}
+
+// Size thresholds for fanning a source into multiple topic segments.
+// Images never segment (they're one frame). Text segments at 15KB because
+// that's ~2500 words — enough content to plausibly have 2+ distinct
+// topics. PDFs get a higher threshold (150KB) because PDF byte overhead
+// (fonts, images, structure) inflates the size well beyond the text
+// density the model actually sees.
+function shouldSegment(size: number, mime: string): boolean {
+  if (mime.startsWith("image/")) return false;
+  if (isTextMime(mime))          return size >= 15 * 1024;
+  if (mime === "application/pdf") return size >= 150 * 1024;
+  return size >= 200 * 1024;
+}
+
+// Segmented calls always use the preview model — they handle the big
+// files, and they need to fit the whole doc in one context window to
+// produce coherent non-overlapping segments.
+function segmentModel(mime: string, size: number): string {
+  // Very big PDFs definitely need the preview's input window.
+  if (mime === "application/pdf" && size > 2 * 1024 * 1024) return MODEL_FLASH_PREVIEW;
+  // Everything else in the segment path is already "big enough" — pick
+  // based on mime/size. Keep symmetry with pickModel's upper tier.
+  if (isTextMime(mime) && size > 200 * 1024) return MODEL_FLASH_PREVIEW;
+  return MODEL_FLASH;
+}
+
+// Per-segment output token budget — each segment is basically a small
+// summary, so N segments × per-segment budget + wrapper overhead.
+function segmentedOutputTokens(size: number): number {
+  // Rough: 8 segments × ~250 words × 1.6 tokens/word + 1KB wrapper/headers.
+  // Scale a bit with input size for very large files.
+  if (size < 50 * 1024)  return 4096;
+  if (size < 200 * 1024) return 6144;
+  return 8192;
 }
 
 // Scale the summary word target with the file size. A 1KB file gets a
@@ -176,6 +290,50 @@ function buildParts(
   return [header, inlineFile(buf, mimeType)];
 }
 
+// Segmented variant — same file content, different instruction. Asks the
+// model to partition the source into 2-8 thematic segments so downstream
+// clustering has real topic structure to work with.
+function buildSegmentedParts(
+  buf: Buffer,
+  mimeType: string,
+  filename: string,
+): LlmPart[] {
+  const header: LlmPart = {
+    text: [
+      `You are ingesting a long source file for a knowledge-galaxy pipeline.`,
+      ``,
+      `Filename: ${filename}`,
+      `Mime type: ${mimeType}`,
+      ``,
+      `This document is large enough that it likely covers MULTIPLE distinct topics. Your job is to partition it into 2-8 thematic SEGMENTS and return each segment as a standalone mini-summary. Downstream code treats every segment as a separate source, so they must NOT overlap — each segment covers one clearly-scoped sub-topic of the document.`,
+      ``,
+      `How to choose segments:`,
+      `- Follow the document's natural structure (chapters, sections, topic shifts) when it has one.`,
+      `- If the document is unstructured, partition by subject matter — group paragraphs that discuss the same topic, separate paragraphs that shift topic.`,
+      `- Aim for segments of roughly similar importance. Don't produce one giant "everything else" segment.`,
+      `- Each segment title should describe ITS topic specifically (e.g. "Quantum Tunneling", not "Chapter 3").`,
+      `- A document covering truly just one topic is rare in files this size, but if it happens, 2 tightly-scoped segments is the minimum — never return 1.`,
+      ``,
+      `Return a structured JSON response matching the schema. Preserve concrete details (names, numbers, examples, quotations) in each segment's summary. Do not hedge. Do not add meta commentary.`,
+    ].join("\n"),
+  };
+
+  if (isTextMime(mimeType)) {
+    const text = buf.toString("utf8").slice(0, 500_000);
+    return [header, { text: `\n\n--- BEGIN SOURCE TEXT ---\n${text}\n--- END SOURCE TEXT ---` }];
+  }
+
+  return [header, inlineFile(buf, mimeType)];
+}
+
+// Filename → stem for prefixing segment titles. `physics-notes.pdf` →
+// `physics-notes`. Keeps segment titles from two different files from
+// colliding when both files happen to name a segment "Introduction".
+function fileStem(filename: string): string {
+  const stem = filename.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim();
+  return stem.length > 0 ? stem : filename;
+}
+
 // ── Stage entry ────────────────────────────────────────────────────
 
 export async function runIngestStage(
@@ -198,40 +356,12 @@ export async function runIngestStage(
     limiter,
     "ingest",
     (item) => ingestWeight(item.size, item.row.mimeType),
-    async ({ row, buf, size }) => {
-      const target = summaryTarget(size);
-      const model = pickModel(size, row.mimeType);
-      const parts = buildParts(buf, row.mimeType, row.filename, target);
-
-      const summary = await generateJson({
-        model,
-        parts,
-        schema: sourceSummarySchema,
-        jsonSchema: sourceSummaryJsonSchema,
-        temperature: 0.4,
-        maxOutputTokens: target.maxOutputTokens,
-      });
-
-      const sourceCtx: SourceCtx = {
-        id: randomUUID(),
-        title: summary.title,
-        filename: row.filename,
-        mediaRef: `sources/${row.mediaPath}`,
-        summary: summary.summary,
-        keyThemes: summary.keyThemes,
-        notableDetails: summary.notableDetails,
-        tone: summary.tone,
-      };
-
-      writeSource(ctx.galaxyId, {
-        id: sourceCtx.id,
-        title: sourceCtx.title,
-        filename: sourceCtx.filename,
-        mediaRef: sourceCtx.mediaRef,
-        body: sourceCtx.summary,
-      });
-
-      return sourceCtx;
+    async ({ row, buf, size }): Promise<SourceCtx[]> => {
+      const mediaRef = `sources/${row.mediaPath}`;
+      if (shouldSegment(size, row.mimeType)) {
+        return await ingestSegmented(ctx.galaxyId, row, buf, size, mediaRef);
+      }
+      return [await ingestSingle(ctx.galaxyId, row, buf, size, mediaRef)];
     },
   );
 
@@ -243,5 +373,143 @@ export async function runIngestStage(
   if (results.length === 0) {
     throw new Error(`ingest: all ${sourceRows.length} sources failed`);
   }
-  ctx.sources.push(...results);
+  // results is SourceCtx[][] — one entry per file, each entry holding
+  // 1 (non-segmented) or N (segmented) virtual sources. Flatten into ctx.
+  const flat = results.flat();
+  console.log(
+    `[ingest] ${sourceRows.length} file(s) → ${flat.length} source(s) (${flat.length - sourceRows.length + failed} via segmentation)`,
+  );
+  ctx.sources.push(...flat);
+}
+
+// Single-summary path — one Gemini call per file, one SourceCtx out.
+// Used for short files that don't need topic partitioning.
+async function ingestSingle(
+  galaxyId: string,
+  row: SourceRow,
+  buf: Buffer,
+  size: number,
+  mediaRef: string,
+): Promise<SourceCtx> {
+  const target = summaryTarget(size);
+  const model = pickModel(size, row.mimeType);
+  const parts = buildParts(buf, row.mimeType, row.filename, target);
+
+  const summary = await generateJson({
+    model,
+    parts,
+    schema: sourceSummarySchema,
+    jsonSchema: sourceSummaryJsonSchema,
+    temperature: 0.4,
+    maxOutputTokens: target.maxOutputTokens,
+  });
+
+  const sourceCtx: SourceCtx = {
+    id: randomUUID(),
+    title: summary.title,
+    filename: row.filename,
+    mediaRef,
+    summary: summary.summary,
+    keyThemes: summary.keyThemes,
+    notableDetails: summary.notableDetails,
+    tone: summary.tone,
+  };
+
+  writeSource(galaxyId, {
+    id: sourceCtx.id,
+    title: sourceCtx.title,
+    filename: sourceCtx.filename,
+    mediaRef: sourceCtx.mediaRef,
+    body: sourceCtx.summary,
+  });
+
+  return sourceCtx;
+}
+
+// Segmented path — one Gemini call per file, but the call returns 2-8
+// thematic segments. Each segment becomes its own SourceCtx (same
+// parent filename/mediaRef, distinct id + title), so the cluster stage
+// sees real topic structure and can partition across them.
+//
+// Segment titles are prefixed with the file stem so identical chapter
+// titles from different files (e.g. "Introduction") don't collide on
+// the filesystem or in the wikiLinkIndex.
+//
+// If segmentation comes back with fewer than 2 valid segments (model
+// misbehaving, truncation, etc.) we fall back to the single-summary
+// path rather than failing the file entirely — better a monolithic
+// source than a missing one.
+async function ingestSegmented(
+  galaxyId: string,
+  row: SourceRow,
+  buf: Buffer,
+  size: number,
+  mediaRef: string,
+): Promise<SourceCtx[]> {
+  const model = segmentModel(row.mimeType, size);
+  const parts = buildSegmentedParts(buf, row.mimeType, row.filename);
+
+  let segResult: z.infer<typeof segmentedSummarySchema>;
+  try {
+    segResult = await generateJson({
+      model,
+      parts,
+      schema: segmentedSummarySchema,
+      jsonSchema: segmentedSummaryJsonSchema,
+      temperature: 0.4,
+      maxOutputTokens: segmentedOutputTokens(size),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[ingest] segmentation failed for ${row.filename} (${msg}) — falling back to single summary`);
+    return [await ingestSingle(galaxyId, row, buf, size, mediaRef)];
+  }
+
+  if (!segResult.segments || segResult.segments.length < 2) {
+    console.warn(`[ingest] segmentation returned <2 segments for ${row.filename} — falling back to single summary`);
+    return [await ingestSingle(galaxyId, row, buf, size, mediaRef)];
+  }
+
+  const stem = fileStem(row.filename);
+  const tone = segResult.tone;
+  const seenTitles = new Set<string>();
+
+  const out: SourceCtx[] = [];
+  for (const seg of segResult.segments) {
+    // Prefix segment titles with the parent file stem. Dedupe against
+    // prior segments from this same file — if the model repeats a
+    // segment title, skip the duplicate.
+    const prefixed = `${stem} — ${seg.title}`.slice(0, 200);
+    if (seenTitles.has(prefixed)) continue;
+    seenTitles.add(prefixed);
+
+    const sourceCtx: SourceCtx = {
+      id: randomUUID(),
+      title: prefixed,
+      filename: row.filename,
+      mediaRef,
+      summary: seg.summary,
+      keyThemes: seg.keyThemes,
+      notableDetails: seg.notableDetails ?? [],
+      tone,
+    };
+
+    writeSource(galaxyId, {
+      id: sourceCtx.id,
+      title: sourceCtx.title,
+      filename: sourceCtx.filename,
+      mediaRef: sourceCtx.mediaRef,
+      body: sourceCtx.summary,
+    });
+
+    out.push(sourceCtx);
+  }
+
+  if (out.length === 0) {
+    console.warn(`[ingest] all segments deduped for ${row.filename} — falling back to single summary`);
+    return [await ingestSingle(galaxyId, row, buf, size, mediaRef)];
+  }
+
+  console.log(`[ingest] ${row.filename} → ${out.length} segments`);
+  return out;
 }
