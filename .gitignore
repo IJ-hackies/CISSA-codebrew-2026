@@ -22,3 +22,11 @@ dist-ssr/
 plan.md
 
 /plan
+
+# server-gemini runtime state
+apps/server-gemini/galaxies/
+apps/server-gemini/galaxies.db
+apps/server-gemini/galaxies.db-*
+
+/terraria-wiki
+/scripts
