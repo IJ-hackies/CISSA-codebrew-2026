@@ -10,17 +10,7 @@
  *   const data = loadMeshFromJson(fixture)
  */
 
-import type {
-  GalaxyData,
-  MeshSolarSystem,
-  MeshPlanet,
-  MeshConcept,
-  MeshStory,
-  MeshSource,
-  MeshMedia,
-  WikiLinkIndex,
-  UUID,
-} from '@scholarsystem/shared'
+import type { GalaxyData } from '@scholarsystem/shared'
 
 // Re-export types so frontend components can import from one place
 export type {

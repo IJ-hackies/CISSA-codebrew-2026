@@ -1,5 +1,6 @@
 <template>
   <div class="solar-view" ref="containerRef">
+
     <!-- Back button -->
     <button class="back-btn" @click="navigateBack">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -8,64 +9,92 @@
       Galaxy
     </button>
 
-    <!-- Cluster title -->
+    <!-- System HUD -->
     <Transition name="fade">
-      <div v-if="cluster && !selectedEntry" class="system-hud">
-        <div class="system-name">{{ cluster.title }}</div>
-        <div class="system-brief">{{ cluster.brief }}</div>
+      <div v-if="solarSystem && !selectedPlanet" class="system-hud">
+        <div class="system-name">{{ solarSystem.title }}</div>
+        <div class="system-meta">{{ solarSystem.planets.length }} planets · {{ solarSystem.concepts.length }} concepts</div>
       </div>
     </Transition>
 
-    <!-- Entry count -->
-    <Transition name="fade">
-      <div v-if="cluster && !selectedEntry" class="entry-count">
-        {{ systemEntries.length }} bodies
-      </div>
-    </Transition>
+    <!-- HTML concept soul overlays -->
+    <div
+      v-for="soul in soulPositions"
+      :key="soul.id"
+      class="soul-overlay"
+      :style="{
+        left: soul.x + 'px',
+        top: soul.y + 'px',
+        opacity: soul.opacity,
+        '--soul-color': soul.color,
+        pointerEvents: soul.occluded ? 'none' : 'auto',
+      }"
+      :class="{ highlighted: soul.highlighted }"
+      @click.stop="collectSoul(soul.id, $event)"
+    >
+      <svg class="soul-svg" viewBox="0 0 24 28" fill="none">
+        <path
+          d="M12 2C7.03 2 3 6.03 3 11v8.5c0 .83.67 1.5 1.5 1.5.5 0 .94-.25 1.2-.63l1.3-1.87 1.3 1.87c.26.38.7.63 1.2.63s.94-.25 1.2-.63l1.3-1.87 1.3 1.87c.26.38.7.63 1.2.63s.94-.25 1.2-.63l1.3-1.87 1.3 1.87c.26.38.7.63 1.2.63.83 0 1.5-.67 1.5-1.5V11c0-4.97-4.03-9-9-9z"
+          fill="var(--soul-color)"
+          fill-opacity="0.85"
+        />
+        <circle cx="9.5" cy="11" r="1.3" fill="rgba(0,0,0,0.4)"/>
+        <circle cx="14.5" cy="11" r="1.3" fill="rgba(0,0,0,0.4)"/>
+      </svg>
+    </div>
 
-    <!-- HTML overlay labels for entry nodes -->
-    <template v-if="!selectedEntry">
+    <!-- HTML planet label overlays -->
+    <template v-if="!selectedPlanet">
       <div
         v-for="lbl in labelPositions"
         :key="lbl.id"
-        class="node-label"
-        :style="{
-          left: lbl.x + 'px',
-          top:  lbl.y + 'px',
-          opacity: lbl.opacity,
-          color: lbl.color,
-          '--lc': lbl.color,
-        }"
+        class="planet-label"
+        :style="{ left: lbl.x + 'px', top: lbl.y + 'px', opacity: lbl.opacity, '--lc': lbl.color }"
       >
-        <div class="lbl-top-row">
-          <span class="lbl-kind">{{ lbl.kind }}</span>
-          <span class="visited-dot" :class="{ 'is-visited': lbl.visited }" :style="{ '--lc': lbl.color }" />
-        </div>
-        <span class="lbl-title">{{ lbl.title }}</span>
+        {{ lbl.title }}
       </div>
     </template>
 
-    <!-- Hover tooltip -->
-    <div
-      v-if="hovered && !selectedEntry"
-      class="node-tooltip"
-      :style="{ left: tooltipPos.x + 'px', top: tooltipPos.y + 'px' }"
-    >
-      <span class="tooltip-brief">{{ hovered.brief }}</span>
+    <!-- Flying soul (GSAP DOM element) -->
+    <div ref="flyingSoulRef" class="flying-soul" style="display:none;">
+      <svg viewBox="0 0 24 28" fill="none">
+        <path
+          d="M12 2C7.03 2 3 6.03 3 11v8.5c0 .83.67 1.5 1.5 1.5.5 0 .94-.25 1.2-.63l1.3-1.87 1.3 1.87c.26.38.7.63 1.2.63s.94-.25 1.2-.63l1.3-1.87 1.3 1.87c.26.38.7.63 1.2.63s.94-.25 1.2-.63l1.3-1.87 1.3 1.87c.26.38.7.63 1.2.63.83 0 1.5-.67 1.5-1.5V11c0-4.97-4.03-9-9-9z"
+          id="fly-soul-path"
+          fill="white"
+          fill-opacity="0.9"
+        />
+      </svg>
     </div>
-
-    <!-- Wrap Card overlay -->
-    <WrapCard
-      v-if="selectedEntry"
-      :wrap="selectedWrap"
-      :entry="selectedEntry"
-      :allWraps="galaxy?.wraps ?? {}"
-      :allEntries="galaxy?.knowledge?.entries ?? []"
-      @close="closeWrap"
-    />
 
     <!-- Nav veil -->
     <div class="nav-veil" ref="veilRef" />
+
+    <!-- Story reader (left) -->
+    <StoryReader
+      v-if="meshData"
+      ref="storyReaderRef"
+      :stories="meshData.stories"
+      :galaxy-data="meshData"
+      @visit-planet="onStoryVisitPlanet"
+      @highlight-concepts="onHighlightConcepts"
+      @navigate-to-planet="onNavigateToPlanet"
+      @open-concept="onOpenConcept"
+    />
+
+    <!-- Planet drawer (right) -->
+    <PlanetDrawer
+      :planet="selectedPlanet"
+      :galaxy-data="meshData"
+      :planet-color="selectedPlanetColor"
+      @close="closeDrawer"
+      @navigate-to-planet="onNavigateToPlanet"
+      @open-concept="onOpenConcept"
+      @open-story="onOpenStory"
+    />
+
+    <!-- Concept HUD (bottom-right) -->
+    <ConceptHUD ref="conceptHudRef" />
   </div>
 </template>
 
@@ -76,503 +105,546 @@ import * as THREE from 'three'
 import gsap from 'gsap'
 import { useThreeScene } from '@/composables/useThreeScene'
 import { useWarpEffect } from '@/composables/useWarpEffect'
-import { useGalaxyStore } from '@/lib/galaxyStore'
-import { MOCK_GALAXY } from '@/lib/mockGalaxy'
-import type { Entry, EntryWrap, ClusterWrap } from '@/lib/galaxyTypes'
-import WrapCard from '@/components/WrapCard.vue'
+import { useMeshStore } from '@/lib/meshStore'
+import type { MeshPlanet, MeshSolarSystem } from '@/lib/meshApi'
+import StoryReader from '@/components/StoryReader.vue'
+import PlanetDrawer from '@/components/PlanetDrawer.vue'
+import ConceptHUD from '@/components/ConceptHUD.vue'
+import type { CollectedConcept } from '@/components/ConceptHUD.vue'
 
+import galaxyFixture from '@/fixtures/galaxy-data.json'
+
+// ── Store & route ─────────────────────────────────────────────────────────────
 const route  = useRoute()
 const router = useRouter()
-const { galaxy, loadGalaxy, setGalaxy } = useGalaxyStore()
+const { data: meshData, loadFromFixture } = useMeshStore()
 
-const containerRef = ref<HTMLDivElement>()
-const veilRef      = ref<HTMLDivElement>()
-const { triggerWarp }  = useWarpEffect()
-const navigating       = ref(false)
-const hovered      = ref<{ brief: string } | null>(null)
-const tooltipPos   = ref({ x: 0, y: 0 })
-const selectedEntry = ref<Entry | null>(null)
-const selectedWrap  = ref<EntryWrap | null>(null)
-
-interface LabelPos { id: string; x: number; y: number; opacity: number; title: string; color: string; kind: string; visited: boolean }
-const labelPositions = ref<LabelPos[]>([])
-const labelWorldData: Array<{ id: string; mesh: THREE.Mesh; title: string; color: string; kind: string; baseRadius: number }> = []
-
-const clusterId = computed(() => route.params.clusterId as string)
-
-const cluster = computed(() =>
-  galaxy.value?.knowledge?.clusters.find((c) => c.id === clusterId.value),
+const systemId = computed(() => route.params.clusterId as string)
+const solarSystem = computed<MeshSolarSystem | null>(() =>
+  meshData.value?.solarSystems[systemId.value] ?? null
 )
 
-const systemEntries = computed(() => {
-  if (!galaxy.value?.knowledge || !clusterId.value) return []
-  const { groups, entries } = galaxy.value.knowledge
-  const clusterGroupIds = new Set(
-    groups.filter((g) => g.clusterId === clusterId.value).map((g) => g.id),
-  )
-  return entries.filter((e) => e.groupId !== null && clusterGroupIds.has(e.groupId!))
-})
+// ── UI refs ───────────────────────────────────────────────────────────────────
+const containerRef   = ref<HTMLDivElement>()
+const veilRef        = ref<HTMLDivElement>()
+const flyingSoulRef  = ref<HTMLDivElement>()
+const conceptHudRef  = ref<InstanceType<typeof ConceptHUD>>()
+const storyReaderRef = ref<InstanceType<typeof StoryReader>>()
 
-// ── Three.js ──────────────────────────────────────────────────────────────────
+const navigating    = ref(false)
+const selectedPlanet      = ref<MeshPlanet | null>(null)
+const selectedPlanetColor = ref('#7c9ef8')
+const highlightedConceptIds = ref<string[]>([])
+const collectedConceptIds   = ref<Set<string>>(new Set())
+
+// ── Overlay types ─────────────────────────────────────────────────────────────
+interface SoulPos  { id: string; x: number; y: number; opacity: number; color: string; highlighted: boolean; occluded: boolean }
+interface LabelPos { id: string; x: number; y: number; opacity: number; title: string; color: string }
+const soulPositions  = ref<SoulPos[]>([])
+const labelPositions = ref<LabelPos[]>([])
+
+// Per-frame world anchors
+const soulWorldData:  Array<{ id: string; pos: THREE.Vector3; color: string }> = []
+const labelWorldData: Array<{ id: string; pos: THREE.Vector3; title: string; color: string; baseRadius: number }> = []
+
+// ── Three.js state ─────────────────────────────────────────────────────────────
 let sceneCtx: ReturnType<typeof useThreeScene> | null = null
-let raycaster:      THREE.Raycaster
-let mouse:          THREE.Vector2
+let raycaster: THREE.Raycaster
+let occlusionRay: THREE.Raycaster
+let mouse: THREE.Vector2
+const planetMeshes = new Map<string, THREE.Mesh>()
 let clickableMeshes: THREE.Mesh[] = []
-const entryMeshMap = new Map<string, THREE.Mesh>()
+let occlusionMeshes: THREE.Mesh[] = []  // planets + sun for occlusion testing
 
-// ── Procedural texture generator ──────────────────────────────────────────────
-function makeProceduralTexture(kind: string, hexColor: string): THREE.CanvasTexture {
+// ── PRNG visual seeding ────────────────────────────────────────────────────────
+function seededRng(seed: string) {
+  let h = 2166136261
+  for (let i = 0; i < seed.length; i++) { h ^= seed.charCodeAt(i); h = Math.imul(h, 16777619) }
+  return () => { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h >>> 0) / 0xffffffff }
+}
+
+const PLANET_COLORS = [
+  '#6a8cff', '#ff7c6e', '#7de8c0', '#ffd166',
+  '#c77dff', '#4cc9f0', '#f77f00', '#a8dadc',
+  '#84a98c', '#e63946', '#457b9d', '#e9c46a',
+]
+const CONCEPT_COLORS = [
+  '#b5a0ff', '#ffc8e8', '#a0f0d0', '#ffeaa7',
+  '#dfe0ff', '#c8f0ff', '#ffd8b8', '#e8f4a0',
+]
+
+function planetHex(id: string) {
+  const rng = seededRng(id); return PLANET_COLORS[Math.floor(rng() * PLANET_COLORS.length)]
+}
+function conceptHex(id: string) {
+  const rng = seededRng(id); return CONCEPT_COLORS[Math.floor(rng() * CONCEPT_COLORS.length)]
+}
+function planetRadius(id: string) {
+  const rng = seededRng(id); rng()
+  return 1.8 + rng() * 2.0 // 1.8–3.8
+}
+
+// ── Procedural planet texture ─────────────────────────────────────────────────
+function makePlanetTexture(id: string, hexColor: string): THREE.CanvasTexture {
+  const rng = seededRng(id + 'tex')
   const S   = 256
   const cv  = document.createElement('canvas')
   cv.width = cv.height = S
   const ctx = cv.getContext('2d')!
   const c   = new THREE.Color(hexColor)
-  const ri = Math.round(c.r * 255)
-  const gi = Math.round(c.g * 255)
-  const bi = Math.round(c.b * 255)
+  const ri  = Math.round(c.r * 255)
+  const gi  = Math.round(c.g * 255)
+  const bi  = Math.round(c.b * 255)
   const base  = `rgb(${ri},${gi},${bi})`
-  const dark  = `rgb(${Math.round(ri*0.35)},${Math.round(gi*0.35)},${Math.round(bi*0.35)})`
+  const dark  = `rgb(${Math.round(ri*0.3)},${Math.round(gi*0.3)},${Math.round(bi*0.3)})`
   const light = `rgb(${Math.min(255,Math.round(ri*1.7))},${Math.min(255,Math.round(gi*1.7))},${Math.min(255,Math.round(bi*1.7))})`
-  // Seeded-ish random using kind + color as seed
-  let seed = kind.charCodeAt(0) * 37 + ri + gi * 3 + bi * 7
-  const rng = () => { seed = (seed * 1664525 + 1013904223) & 0xffffffff; return (seed >>> 0) / 0xffffffff }
 
-  switch (kind) {
-    case 'moment': {
-      // Moon — mottled grey with craters
-      const bg = ctx.createRadialGradient(S*0.4, S*0.35, S*0.05, S/2, S/2, S/2)
-      bg.addColorStop(0, light); bg.addColorStop(0.6, base); bg.addColorStop(1, dark)
-      ctx.fillStyle = bg; ctx.fillRect(0, 0, S, S)
-      for (let i = 0; i < 14; i++) {
-        const cx = rng()*S, cy = rng()*S, cr = 4 + rng()*18
-        ctx.beginPath(); ctx.arc(cx, cy, cr, 0, Math.PI*2)
-        ctx.fillStyle = `rgba(${Math.round(ri*0.25)},${Math.round(gi*0.25)},${Math.round(bi*0.25)},0.55)`; ctx.fill()
-        ctx.beginPath(); ctx.arc(cx-cr*0.18, cy-cr*0.18, cr*0.7, 0, Math.PI*2)
-        ctx.fillStyle = `rgba(${Math.min(255,ri+60)},${Math.min(255,gi+60)},${Math.min(255,bi+60)},0.2)`; ctx.fill()
-      }
-      break
-    }
-    case 'person': {
-      // Planet — horizontal atmospheric bands
+  // Pick a texture style based on seeded rng
+  const style = Math.floor(rng() * 4)
+  switch (style) {
+    case 0: {
+      // Banded gas giant
       const grad = ctx.createLinearGradient(0, 0, 0, S)
-      grad.addColorStop(0, light); grad.addColorStop(0.18, base)
-      grad.addColorStop(0.5, dark); grad.addColorStop(0.82, base); grad.addColorStop(1, light)
+      grad.addColorStop(0, light); grad.addColorStop(0.2, base)
+      grad.addColorStop(0.55, dark); grad.addColorStop(0.8, base); grad.addColorStop(1, light)
       ctx.fillStyle = grad; ctx.fillRect(0, 0, S, S)
-      for (let i = 0; i < 7; i++) {
-        const y = rng()*S, bh = 6 + rng()*22
-        ctx.fillStyle = i%2===0 ? `rgba(${Math.round(ri*0.3)},${Math.round(gi*0.3)},${Math.round(bi*0.3)},0.45)` : `rgba(${Math.min(255,ri+50)},${Math.min(255,gi+50)},${Math.min(255,bi+50)},0.25)`
+      for (let i = 0; i < 6; i++) {
+        const y = rng() * S, bh = 5 + rng() * 20
+        ctx.fillStyle = i % 2 === 0
+          ? `rgba(${Math.round(ri*0.25)},${Math.round(gi*0.25)},${Math.round(bi*0.25)},0.4)`
+          : `rgba(${Math.min(255,ri+50)},${Math.min(255,gi+50)},${Math.min(255,bi+50)},0.2)`
         ctx.fillRect(0, y, S, bh)
       }
-      // Polar shimmer
-      ctx.fillStyle = `rgba(255,255,255,0.12)`; ctx.fillRect(0, 0, S, 18)
-      ctx.fillRect(0, S-18, S, 18)
+      ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fillRect(0, 0, S, 16); ctx.fillRect(0, S-16, S, 16)
       break
     }
-    case 'place': {
-      // Planet — ocean + continent patches
+    case 1: {
+      // Cratered moon
+      const bg = ctx.createRadialGradient(S*0.38, S*0.33, S*0.04, S/2, S/2, S/2)
+      bg.addColorStop(0, light); bg.addColorStop(0.6, base); bg.addColorStop(1, dark)
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, S, S)
+      for (let i = 0; i < 12; i++) {
+        const cx = rng()*S, cy = rng()*S, cr = 5 + rng()*16
+        ctx.beginPath(); ctx.arc(cx, cy, cr, 0, Math.PI*2)
+        ctx.fillStyle = `rgba(${Math.round(ri*0.2)},${Math.round(gi*0.2)},${Math.round(bi*0.2)},0.55)`; ctx.fill()
+        ctx.beginPath(); ctx.arc(cx-cr*0.2, cy-cr*0.2, cr*0.6, 0, Math.PI*2)
+        ctx.fillStyle = `rgba(${Math.min(255,ri+50)},${Math.min(255,gi+50)},${Math.min(255,bi+50)},0.18)`; ctx.fill()
+      }
+      break
+    }
+    case 2: {
+      // Ocean + continents
       ctx.fillStyle = dark; ctx.fillRect(0, 0, S, S)
-      // Slight ocean depth gradient
       const og = ctx.createRadialGradient(S/2, S/2, S*0.1, S/2, S/2, S*0.6)
-      og.addColorStop(0, `rgba(${Math.min(255,ri+30)},${Math.min(255,gi+30)},${Math.min(255,bi+60)},0.3)`)
+      og.addColorStop(0, `rgba(${Math.min(255,ri+30)},${Math.min(255,gi+30)},${Math.min(255,bi+60)},0.35)`)
       og.addColorStop(1, 'rgba(0,0,0,0)')
       ctx.fillStyle = og; ctx.fillRect(0, 0, S, S)
-      // Continents
       for (let i = 0; i < 4; i++) {
-        const cx = 20 + rng()*(S-40), cy = 20 + rng()*(S-40)
-        const w = 30 + rng()*70, h = 20 + rng()*55
-        ctx.beginPath()
-        ctx.ellipse(cx, cy, w/2, h/2, rng()*Math.PI, 0, Math.PI*2)
-        ctx.fillStyle = `rgba(${Math.min(255,ri+25)},${Math.min(255,gi+35)},${Math.round(bi*0.7)},0.75)`; ctx.fill()
-      }
-      break
-    }
-    case 'theme': {
-      // Star — bright radiant corona
-      const rg = ctx.createRadialGradient(S/2, S/2, 0, S/2, S/2, S/2)
-      rg.addColorStop(0, 'white')
-      rg.addColorStop(0.15, light)
-      rg.addColorStop(0.45, base)
-      rg.addColorStop(0.8, `rgba(${ri},${gi},${bi},0.35)`)
-      rg.addColorStop(1, 'rgba(0,0,0,0)')
-      ctx.fillStyle = rg; ctx.fillRect(0, 0, S, S)
-      // Corona spikes
-      ctx.save(); ctx.translate(S/2, S/2)
-      for (let i = 0; i < 10; i++) {
-        ctx.rotate(Math.PI/5)
-        ctx.beginPath(); ctx.moveTo(0, 0)
-        ctx.lineTo(S*0.45, S*0.04); ctx.lineTo(S*0.52, 0); ctx.lineTo(S*0.45, -S*0.04)
-        ctx.closePath(); ctx.fillStyle = `rgba(255,255,255,0.18)`; ctx.fill()
-      }
-      ctx.restore()
-      break
-    }
-    case 'artifact': {
-      // Comet — dark rocky surface
-      ctx.fillStyle = dark; ctx.fillRect(0, 0, S, S)
-      for (let i = 0; i < 22; i++) {
-        const cx = rng()*S, cy = rng()*S, cr = 3 + rng()*14
-        ctx.beginPath(); ctx.arc(cx, cy, cr, 0, Math.PI*2)
-        ctx.fillStyle = i%4===0 ? `rgba(${Math.min(255,ri+80)},${Math.min(255,gi+80)},${Math.min(255,bi+80)},0.35)` : `rgba(${Math.round(ri*0.6)},${Math.round(gi*0.6)},${Math.round(bi*0.6)},0.4)`
-        ctx.fill()
-      }
-      // Highlight edge
-      const hg = ctx.createRadialGradient(S*0.3, S*0.3, 0, S/2, S/2, S/2)
-      hg.addColorStop(0, `rgba(${Math.min(255,ri+60)},${Math.min(255,gi+60)},${Math.min(255,bi+60)},0.3)`)
-      hg.addColorStop(1, 'rgba(0,0,0,0)')
-      ctx.fillStyle = hg; ctx.fillRect(0, 0, S, S)
-      break
-    }
-    case 'milestone': {
-      // Large moon — bright cratered silver
-      const mg = ctx.createRadialGradient(S*0.38, S*0.35, S*0.05, S/2, S/2, S*0.52)
-      mg.addColorStop(0, 'white'); mg.addColorStop(0.4, light); mg.addColorStop(0.85, base); mg.addColorStop(1, dark)
-      ctx.fillStyle = mg; ctx.fillRect(0, 0, S, S)
-      // Prominent impact rings
-      for (let i = 0; i < 5; i++) {
-        const cx = 35 + rng()*(S-70), cy = 35 + rng()*(S-70), cr = 14 + rng()*28
-        ctx.beginPath(); ctx.arc(cx, cy, cr, 0, Math.PI*2)
-        ctx.strokeStyle = `rgba(${Math.round(ri*0.25)},${Math.round(gi*0.25)},${Math.round(bi*0.25)},0.7)`;
-        ctx.lineWidth = 1.5; ctx.stroke()
-        ctx.beginPath(); ctx.arc(cx, cy, cr*0.42, 0, Math.PI*2)
-        ctx.fillStyle = `rgba(${Math.round(ri*0.3)},${Math.round(gi*0.3)},${Math.round(bi*0.3)},0.55)`; ctx.fill()
-      }
-      break
-    }
-    case 'period': {
-      // Ringed planet — atmospheric cloud bands
-      const pg = ctx.createLinearGradient(0, 0, 0, S)
-      pg.addColorStop(0, light); pg.addColorStop(0.28, `rgba(${Math.min(255,ri+40)},${Math.min(255,gi+40)},${Math.min(255,bi+40)},1)`)
-      pg.addColorStop(0.6, base); pg.addColorStop(1, dark)
-      ctx.fillStyle = pg; ctx.fillRect(0, 0, S, S)
-      for (let i = 0; i < 9; i++) {
-        const y = (i/9)*S + rng()*8
-        ctx.fillStyle = i%2===0 ? `rgba(255,255,255,0.07)` : `rgba(0,0,0,0.12)`
-        ctx.fillRect(0, y, S, S/10)
+        const cx = 20 + rng()*(S-40), cy = 20 + rng()*(S-40), w = 28 + rng()*65, h = 20 + rng()*50
+        ctx.beginPath(); ctx.ellipse(cx, cy, w/2, h/2, rng()*Math.PI, 0, Math.PI*2)
+        ctx.fillStyle = `rgba(${Math.min(255,ri+20)},${Math.min(255,gi+30)},${Math.round(bi*0.65)},0.7)`; ctx.fill()
       }
       break
     }
     default: {
-      ctx.fillStyle = base; ctx.fillRect(0, 0, S, S)
+      // Radiant star-like
+      const rg = ctx.createRadialGradient(S/2, S/2, 0, S/2, S/2, S/2)
+      rg.addColorStop(0, 'white'); rg.addColorStop(0.12, light); rg.addColorStop(0.45, base)
+      rg.addColorStop(0.82, `rgba(${ri},${gi},${bi},0.3)`); rg.addColorStop(1, 'rgba(0,0,0,0)')
+      ctx.fillStyle = rg; ctx.fillRect(0, 0, S, S)
+      ctx.save(); ctx.translate(S/2, S/2)
+      for (let i = 0; i < 8; i++) {
+        ctx.rotate(Math.PI/4)
+        ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(S*0.44, S*0.03); ctx.lineTo(S*0.5, 0); ctx.lineTo(S*0.44, -S*0.03)
+        ctx.closePath(); ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fill()
+      }
+      ctx.restore()
     }
   }
   return new THREE.CanvasTexture(cv)
 }
 
-// ── Entry kind → mesh ─────────────────────────────────────────────────────────
-function getMeshForKind(kind: string, color: THREE.Color, hexColor: string): { mesh: THREE.Mesh; baseRadius: number } {
-  const tex = makeProceduralTexture(kind, hexColor)
-  // Low emissive — let the sun light do the work
-  switch (kind) {
-    case 'person': case 'place': {
-      // Gas giant — moderate warm glow
-      const r = 3.8, geo = new THREE.SphereGeometry(r, 36, 36)
-      const mat = new THREE.MeshStandardMaterial({ map: tex, color, emissive: color, emissiveIntensity: 0.10, roughness: 0.75, metalness: 0 })
-      return { mesh: new THREE.Mesh(geo, mat), baseRadius: r }
-    }
-    case 'theme': {
-      // Sub-star — brightest entry kind
-      const r = 3.2, geo = new THREE.IcosahedronGeometry(r, 2)
-      const mat = new THREE.MeshStandardMaterial({ map: tex, color, emissive: color, emissiveIntensity: 0.24, roughness: 0.05, metalness: 0 })
-      return { mesh: new THREE.Mesh(geo, mat), baseRadius: r }
-    }
-    case 'artifact': {
-      // Rocky asteroid — very dim, no bloom
-      const r = 2.2, geo = new THREE.SphereGeometry(r, 18, 12)
-      const mat = new THREE.MeshStandardMaterial({ map: tex, color, emissive: color, emissiveIntensity: 0.05, roughness: 0.9, metalness: 0.15 })
-      const mesh = new THREE.Mesh(geo, mat)
-      mesh.scale.set(1.6, 0.7, 0.75)
-      return { mesh, baseRadius: r }
-    }
-    case 'milestone': {
-      // Glowing milestone — second brightest
-      const r = 3.4, geo = new THREE.SphereGeometry(r, 32, 32)
-      const mat = new THREE.MeshStandardMaterial({ map: tex, color, emissive: color, emissiveIntensity: 0.19, roughness: 0.3, metalness: 0.08 })
-      return { mesh: new THREE.Mesh(geo, mat), baseRadius: r }
-    }
-    case 'period': {
-      // Ringed planet — medium glow
-      const r = 3.2, geo = new THREE.SphereGeometry(r, 32, 32)
-      const mat = new THREE.MeshStandardMaterial({ map: tex, color, emissive: color, emissiveIntensity: 0.13, roughness: 0.72, metalness: 0 })
-      const mesh = new THREE.Mesh(geo, mat)
-      const ringGeo = new THREE.TorusGeometry(5.4, 0.32, 8, 48)
-      const ringMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false })
-      const ring = new THREE.Mesh(ringGeo, ringMat)
-      ring.rotation.x = Math.PI / 2.2
-      mesh.add(ring)
-      return { mesh, baseRadius: r }
-    }
-    default: {
-      // moment — small dim moon
-      const r = 2.3, geo = new THREE.SphereGeometry(r, 28, 28)
-      const mat = new THREE.MeshStandardMaterial({ map: tex, color, emissive: color, emissiveIntensity: 0.08, roughness: 0.65, metalness: 0 })
-      return { mesh: new THREE.Mesh(geo, mat), baseRadius: r }
-    }
-  }
-}
-
-// Fibonacci sphere — even distribution
-function fibonacciSphere(count: number): THREE.Vector3[] {
+// ── Fibonacci sphere distribution ─────────────────────────────────────────────
+function fibSphere(count: number): THREE.Vector3[] {
   const pts: THREE.Vector3[] = []
   const phi = Math.PI * (3 - Math.sqrt(5))
   for (let i = 0; i < count; i++) {
     const y = 1 - (i / (count - 1)) * 2
-    const r = Math.sqrt(1 - y * y)
+    const r = Math.sqrt(Math.max(0, 1 - y * y))
     const theta = phi * i
     pts.push(new THREE.Vector3(Math.cos(theta) * r, y, Math.sin(theta) * r))
   }
   return pts
 }
 
-function buildSolarSystem() {
-  if (!sceneCtx || !galaxy.value?.knowledge) return
+// ── Build solar system scene ───────────────────────────────────────────────────
+function buildScene() {
+  if (!sceneCtx || !meshData.value || !solarSystem.value) return
   const { scene } = sceneCtx
-  const entries     = systemEntries.value
-  const wraps       = galaxy.value.wraps
-  const clusterWrap = wraps[clusterId.value] as ClusterWrap | undefined
+  const sys = solarSystem.value
+  const data = meshData.value
 
-  clickableMeshes = []
-  entryMeshMap.clear()
+  planetMeshes.clear()
+  clickableMeshes  = []
+  occlusionMeshes  = []
+  soulWorldData.splice(0)
   labelWorldData.splice(0)
-  scene.children.filter((c) => c.userData.clearable).forEach((c) => scene.remove(c))
 
   // ── Central sun ───────────────────────────────────────────────────────────
-  const sunColor = new THREE.Color(clusterWrap?.color ?? '#f8c97c')
-  const sunTex   = makeProceduralTexture('theme', clusterWrap?.color ?? '#f8c97c')
-  const sunGeo   = new THREE.SphereGeometry(7.5, 40, 40)
-  const sunMat   = new THREE.MeshStandardMaterial({
-    map: sunTex, color: sunColor,
-    emissive: sunColor, emissiveIntensity: 0.48,
+  const rng = seededRng(sys.id)
+  const sunHex = PLANET_COLORS[Math.floor(rng() * PLANET_COLORS.length)]
+  const sunColor = new THREE.Color(sunHex)
+
+  const sunGeo = new THREE.SphereGeometry(6.5, 40, 40)
+  const sunMat = new THREE.MeshStandardMaterial({
+    color: sunColor, emissive: sunColor, emissiveIntensity: 0.6,
     roughness: 0.05, metalness: 0,
   })
   const sun = new THREE.Mesh(sunGeo, sunMat)
   sun.userData = { clearable: true }
   scene.add(sun)
+  occlusionMeshes.push(sun)
 
-  // Sun glow shells (reduced, more atmospheric)
-  for (let i = 1; i <= 2; i++) {
-    const glowGeo = new THREE.SphereGeometry(7.5 + i * 3, 28, 28)
+  // Sun glow layers
+  for (let i = 1; i <= 3; i++) {
+    const glowGeo = new THREE.SphereGeometry(6.5 + i * 3.5, 28, 28)
     const glowMat = new THREE.MeshBasicMaterial({
-      color: sunColor, transparent: true, opacity: 0.04 / i,
+      color: sunColor, transparent: true, opacity: 0.035 / i,
       side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false,
     })
-    scene.add(Object.assign(new THREE.Mesh(glowGeo, glowMat), { userData: { clearable: true } }))
+    const g = new THREE.Mesh(glowGeo, glowMat)
+    g.userData = { clearable: true }
+    scene.add(g)
   }
 
-  // Sun light — primary illumination for entries
-  const sunLight = new THREE.PointLight(sunColor, 2.0, 200)
+  // Sun point light
+  const sunLight = new THREE.PointLight(sunColor, 2.2, 220)
   sunLight.userData = { clearable: true }
   scene.add(sunLight)
 
-  if (entries.length === 0) return
+  // ── Planets ───────────────────────────────────────────────────────────────
+  const planets = sys.planets
+    .map((id) => data.planets[id])
+    .filter(Boolean)
 
-  const groupOrder  = galaxy.value.knowledge.groups
-    .filter((g) => g.clusterId === clusterId.value)
-    .map((g, i) => ({ id: g.id, rank: i }))
-  const groupRankMap = new Map(groupOrder.map((g) => [g.id, g.rank]))
+  const baseR = 28, radStep = 10
+  const dirs = fibSphere(planets.length)
 
-  const baseR = 30, radStep = 13
-  const sorted = [...entries].sort((a, b) =>
-    (groupRankMap.get(a.groupId ?? '') ?? 0) - (groupRankMap.get(b.groupId ?? '') ?? 0),
-  )
-  const dirs = fibonacciSphere(sorted.length)
+  planets.forEach((planet, i) => {
+    const hex    = planetHex(planet.id)
+    const color  = new THREE.Color(hex)
+    const r      = planetRadius(planet.id)
+    const rngP   = seededRng(planet.id + 'dist')
+    const jitter = (rngP() - 0.5) * 8
+    const dist   = baseR + (i % 4) * radStep + jitter
+    const pos    = dirs[i].clone().multiplyScalar(dist)
 
-  sorted.forEach((entry, i) => {
-    const wrap     = wraps[entry.id]
-    const hexColor = wrap?.color ?? '#7c9ef8'
-    const color    = new THREE.Color(hexColor)
-    const groupRank = groupRankMap.get(entry.groupId ?? '') ?? 0
-    // Vary distance: inner groups closer, outer groups farther, plus jitter
-    const seededJitter = ((entry.id.charCodeAt(0) * 17 + entry.id.charCodeAt(2) * 31) % 100) / 100 - 0.5
-    const dist = baseR + groupRank * radStep + seededJitter * 7
-    const pos  = dirs[i].clone().multiplyScalar(dist)
-
-    const { mesh, baseRadius } = getMeshForKind(entry.kind, color, hexColor)
+    const tex = makePlanetTexture(planet.id, hex)
+    const geo = new THREE.SphereGeometry(r, 32, 32)
+    const mat = new THREE.MeshStandardMaterial({
+      map: tex, color, emissive: color, emissiveIntensity: 0.12,
+      roughness: 0.65, metalness: 0,
+    })
+    const mesh = new THREE.Mesh(geo, mat)
     mesh.position.copy(pos)
-    mesh.userData = { clearable: true, entryId: entry.id, title: entry.title, brief: entry.brief, kind: entry.kind, baseRadius }
+    mesh.userData = { clearable: true, planetId: planet.id, title: planet.title, baseRadius: r }
 
-    // Subtle atmospheric glow (size varies by kind)
-    const glowR = baseRadius * 1.5
-    const glowGeo = new THREE.SphereGeometry(glowR, 18, 18)
+    // Glow
+    const glowGeo = new THREE.SphereGeometry(r * 1.6, 18, 18)
     const glowMat = new THREE.MeshBasicMaterial({
       color, transparent: true, opacity: 0.045,
       side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false,
     })
     mesh.add(new THREE.Mesh(glowGeo, glowMat))
 
-    scene.add(mesh)
-    clickableMeshes.push(mesh)
-    entryMeshMap.set(entry.id, mesh)
-    labelWorldData.push({ id: entry.id, mesh, title: entry.title, color: hexColor, kind: entry.kind, baseRadius })
-
-    // Faint radial connection line
+    // Faint radial line to sun
     const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), pos])
     const lineMat = new THREE.LineBasicMaterial({
-      color: new THREE.Color(hexColor), transparent: true, opacity: 0.05,
+      color, transparent: true, opacity: 0.04,
       blending: THREE.AdditiveBlending, depthWrite: false,
     })
-    scene.add(Object.assign(new THREE.Line(lineGeo, lineMat), { userData: { clearable: true } }))
+    const line = new THREE.Line(lineGeo, lineMat)
+    line.userData = { clearable: true }
+    scene.add(line)
+
+    scene.add(mesh)
+    planetMeshes.set(planet.id, mesh)
+    clickableMeshes.push(mesh)
+    occlusionMeshes.push(mesh)
+    labelWorldData.push({ id: planet.id, pos: pos.clone(), title: planet.title, color: hex, baseRadius: r })
+  })
+
+  // ── Concepts (soul anchor positions) ─────────────────────────────────────
+  const concepts = sys.concepts
+    .map((id) => data.concepts[id])
+    .filter(Boolean)
+
+  const conceptDirs = fibSphere(Math.max(concepts.length, 2))
+  concepts.forEach((concept, i) => {
+    const hex  = conceptHex(concept.id)
+    const rngC = seededRng(concept.id + 'dist')
+    const dist = 18 + rngC() * 20 // float between inner and outer belt
+    const pos  = conceptDirs[i % conceptDirs.length].clone().multiplyScalar(dist)
+    soulWorldData.push({ id: concept.id, pos, color: hex })
   })
 }
 
-// ── Per-frame animation ───────────────────────────────────────────────────────
-function onFrame() {
-  // Self-rotation per entry (kind-based speeds)
-  entryMeshMap.forEach((mesh) => {
-    mesh.rotation.y += 0.004
-    mesh.rotation.x += 0.0008
+// ── Per-frame ─────────────────────────────────────────────────────────────────
+function onFrame(_elapsed: number) {
+  // Planet self-rotation
+  planetMeshes.forEach((mesh) => {
+    mesh.rotation.y += 0.003
+    mesh.rotation.x += 0.0006
   })
 
-  // HTML label projection
-  if (!sceneCtx || !containerRef.value || labelWorldData.length === 0) return
+  // Overlay projection
+  if (!sceneCtx || !containerRef.value) return
   const cam = sceneCtx.camera
   const w   = containerRef.value.clientWidth
   const h   = containerRef.value.clientHeight
   const tmp = new THREE.Vector3()
 
-  const updated: LabelPos[] = []
-  for (const lbl of labelWorldData) {
-    tmp.copy(lbl.mesh.position)
+  // Souls
+  const updatedSouls: SoulPos[] = []
+  const _dir = new THREE.Vector3()
+  for (const s of soulWorldData) {
+    if (collectedConceptIds.value.has(s.id)) continue
+    tmp.copy(s.pos)
     tmp.project(cam)
-    if (tmp.z >= 1) continue  // behind camera
     const sx = (tmp.x * 0.5 + 0.5) * w
     const sy = (-tmp.y * 0.5 + 0.5) * h
-    const dist = cam.position.distanceTo(lbl.mesh.position)
-    const opacity = Math.max(0, Math.min(1, (180 - dist) / 60))
-    // Offset label above the body — approximate screen-space radius
-    const screenOffset = Math.max(14, (lbl.baseRadius * h) / (dist + 0.1) * 0.35)
-    const visited = !!(galaxy.value?.exploration.visited[lbl.id])
-    updated.push({ id: lbl.id, x: sx, y: sy - screenOffset - 8, opacity, title: lbl.title, color: lbl.color, kind: lbl.kind, visited })
-  }
-  labelPositions.value = updated
+    const dist = cam.position.distanceTo(s.pos)
+    const baseOpacity = tmp.z < 1 ? Math.max(0, Math.min(0.9, (180 - dist) / 50)) : 0
 
+    // Occlusion: cast a ray from camera toward the soul — dim it if a planet/sun is in the way
+    let occluded = false
+    if (baseOpacity > 0 && occlusionMeshes.length > 0) {
+      _dir.subVectors(s.pos, cam.position).normalize()
+      occlusionRay.set(cam.position, _dir)
+      occlusionRay.far = dist - 0.5
+      occluded = occlusionRay.intersectObjects(occlusionMeshes, false).length > 0
+    }
+
+    updatedSouls.push({
+      id: s.id, x: sx - 10, y: sy - 14,
+      opacity: occluded ? baseOpacity * 0.15 : baseOpacity,
+      color: s.color,
+      highlighted: highlightedConceptIds.value.includes(s.id),
+      occluded,
+    })
+  }
+  soulPositions.value = updatedSouls
+
+  // Planet labels
+  const updatedLabels: LabelPos[] = []
+  for (const lbl of labelWorldData) {
+    const mesh = planetMeshes.get(lbl.id)
+    if (!mesh) continue
+    tmp.copy(mesh.position)
+    tmp.project(cam)
+    const sx = (tmp.x * 0.5 + 0.5) * w
+    const sy = (-tmp.y * 0.5 + 0.5) * h
+    const dist = cam.position.distanceTo(mesh.position)
+    const opacity = tmp.z < 1 ? Math.max(0, Math.min(1, (120 - dist) / 40)) : 0
+    const r = lbl.baseRadius * mesh.scale.x
+    updatedLabels.push({
+      id: lbl.id, x: sx, y: sy - r * (h / (dist + 0.01)) - 14,
+      opacity, title: lbl.title, color: lbl.color,
+    })
+  }
+  labelPositions.value = updatedLabels
 }
 
-// ── Raycasting ────────────────────────────────────────────────────────────────
+// ── Raycasting ─────────────────────────────────────────────────────────────────
 function onMouseMove(e: MouseEvent) {
-  if (!sceneCtx || !containerRef.value || selectedEntry.value) return
+  if (!sceneCtx || !containerRef.value || selectedPlanet.value || navigating.value) return
   const rect = containerRef.value.getBoundingClientRect()
   mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
   mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(mouse, sceneCtx.camera)
   const hits = raycaster.intersectObjects(clickableMeshes, true)
-  const hit  = hits.find((h) => h.object.userData.entryId || h.object.parent?.userData.entryId)
-  if (hit) {
-    const ud = hit.object.userData.entryId ? hit.object.userData : hit.object.parent!.userData
-    hovered.value = { brief: ud.brief }
-    tooltipPos.value = { x: e.clientX - rect.left + 16, y: e.clientY - rect.top - 8 }
-    containerRef.value.style.cursor = 'pointer'
-  } else {
-    hovered.value = null
-    containerRef.value.style.cursor = 'grab'
-  }
+  const hit  = hits.find((h) => h.object.userData.planetId || h.object.parent?.userData.planetId)
+  containerRef.value.style.cursor = hit ? 'pointer' : 'grab'
 }
 
 function onClick(e: MouseEvent) {
-  if (!sceneCtx || !containerRef.value || selectedEntry.value || navigating.value) return
+  if (!sceneCtx || !containerRef.value || selectedPlanet.value || navigating.value) return
   const rect = containerRef.value.getBoundingClientRect()
   mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
   mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(mouse, sceneCtx.camera)
   const hits = raycaster.intersectObjects(clickableMeshes, true)
-  const hit  = hits.find((h) => h.object.userData.entryId || h.object.parent?.userData.entryId)
+  const hit  = hits.find((h) => h.object.userData.planetId || h.object.parent?.userData.planetId)
   if (!hit) return
 
-  const ud    = hit.object.userData.entryId ? hit.object.userData : hit.object.parent!.userData
-  const entry = galaxy.value?.knowledge?.entries.find((e) => e.id === ud.entryId)
-  const wrap  = galaxy.value?.wraps[ud.entryId]
-  if (!entry || !wrap || wrap.level !== 'entry') return
+  const ud = hit.object.userData.planetId ? hit.object.userData : hit.object.parent!.userData
+  const planetId = ud.planetId as string
 
-  const target = (hit.object.userData.entryId ? hit.object : hit.object.parent!).position.clone()
+  flyToPlanet(planetId, true)
+}
+
+// ── Planet navigation ──────────────────────────────────────────────────────────
+function flyToPlanet(planetId: string, openDrawer: boolean) {
+  if (!sceneCtx) return
+  const mesh = planetMeshes.get(planetId)
+  if (!mesh) return
+
+  const target = mesh.position.clone()
   const camDir = sceneCtx.camera.position.clone().sub(target).normalize()
   const dest   = target.clone().addScaledVector(camDir, 16)
 
+  // Scale duration by distance so far planets don't require a fast camera spin
+  const travelDist = sceneCtx.camera.position.distanceTo(dest)
+  const duration   = Math.max(0.55, Math.min(0.95, travelDist / 22))
+
   sceneCtx.controls.enabled = false
-  const tl = gsap.timeline({ onComplete: () => {
-    // Mark as visited
-    if (galaxy.value?.exploration) {
-      const now = Date.now()
-      const previous = galaxy.value.exploration.visited[entry.id]
-      galaxy.value.exploration.visited[entry.id] = previous
-        ? {
-            firstVisitedAt: previous.firstVisitedAt,
-            lastVisitedAt: now,
-            visitCount: previous.visitCount + 1,
-          }
-        : {
-            firstVisitedAt: now,
-            lastVisitedAt: now,
-            visitCount: 1,
-          }
-    }
-    selectedEntry.value = entry
-    selectedWrap.value  = wrap as EntryWrap
-  }})
-  tl.to(sceneCtx.camera.position, { x: dest.x, y: dest.y, z: dest.z, duration: 0.6, ease: 'power2.inOut',
-    onUpdate: () => { sceneCtx!.controls.update() } }, 0)
-  tl.to(sceneCtx.controls.target, { x: target.x, y: target.y, z: target.z, duration: 0.6, ease: 'power2.inOut' }, 0)
+  const tl = gsap.timeline({
+    onUpdate:  () => { sceneCtx!.controls.update() },
+    onComplete: () => {
+      sceneCtx!.controls.enabled = true
+      if (openDrawer) openPlanetById(planetId)
+    },
+  })
+  tl.to(sceneCtx.camera.position, { x: dest.x,    y: dest.y,    z: dest.z,    duration, ease: 'power2.inOut' }, 0)
+  tl.to(sceneCtx.controls.target,  { x: target.x, y: target.y, z: target.z, duration, ease: 'power2.inOut' }, 0)
 }
 
-function closeWrap() {
-  selectedEntry.value = null
-  selectedWrap.value  = null
+function openPlanetById(planetId: string) {
+  const planet = meshData.value?.planets[planetId]
+  if (!planet) return
+  selectedPlanet.value  = planet
+  selectedPlanetColor.value = planetHex(planetId)
+}
+
+function closeDrawer() {
+  selectedPlanet.value = null
   if (sceneCtx) {
     sceneCtx.controls.enabled = true
-    const tl = gsap.timeline()
-    tl.to(sceneCtx.camera.position, { x: 0, y: 0, z: 85, duration: 0.65, ease: 'power2.inOut',
-      onUpdate: () => { sceneCtx!.controls.update() } }, 0)
-    tl.to(sceneCtx.controls.target, { x: 0, y: 0, z: 0, duration: 0.65, ease: 'power2.inOut' }, 0)
+    const tl = gsap.timeline({
+      onUpdate: () => { sceneCtx!.controls.update() },
+    })
+    tl.to(sceneCtx.camera.position, { x: 0, y: 0, z: 85, duration: 0.6, ease: 'power2.inOut' }, 0)
+    tl.to(sceneCtx.controls.target,  { x: 0, y: 0, z: 0,  duration: 0.6, ease: 'power2.inOut' }, 0)
   }
 }
 
+// ── Concept soul collection ────────────────────────────────────────────────────
+function collectSoul(conceptId: string, event: MouseEvent) {
+  if (collectedConceptIds.value.has(conceptId)) return
+  if (!conceptHudRef.value || !flyingSoulRef.value || !containerRef.value) return
+  const concept = meshData.value?.concepts[conceptId]
+  if (!concept) return
+
+  const color = conceptHex(conceptId)
+  const hudTarget = conceptHudRef.value.getTargetRect()
+  if (!hudTarget) return
+
+  const soulEl   = event.currentTarget as HTMLElement
+  const soulRect = soulEl.getBoundingClientRect()
+
+  const fly = flyingSoulRef.value
+  const pathEl = fly.querySelector('#fly-soul-path') as SVGPathElement
+  if (pathEl) pathEl.style.fill = color
+
+  fly.style.display = 'block'
+  fly.style.position = 'fixed'
+  fly.style.width  = '22px'
+  fly.style.height = '26px'
+  fly.style.left   = soulRect.left + 'px'
+  fly.style.top    = soulRect.top  + 'px'
+  fly.style.zIndex = '9999'
+  fly.style.pointerEvents = 'none'
+
+  collectedConceptIds.value = new Set([...collectedConceptIds.value, conceptId])
+
+  const destX = hudTarget.left + hudTarget.width  / 2 - 11
+  const destY = hudTarget.top  + hudTarget.height / 2 - 13
+
+  gsap.timeline()
+    .to(fly, { y: -18, duration: 0.28, ease: 'power2.out' })
+    .to(fly, { x: destX - soulRect.left, y: destY - soulRect.top, scale: 0.5, opacity: 0.8, duration: 0.5, ease: 'power2.inOut' })
+    .to(fly, {
+      opacity: 0, scale: 0.2, duration: 0.15, ease: 'power2.in',
+      onComplete: () => {
+        fly.style.display = 'none'
+        gsap.set(fly, { x: 0, y: 0, scale: 1, opacity: 1 })
+        conceptHudRef.value?.collect({ id: conceptId, title: concept.title, color } satisfies CollectedConcept)
+      },
+    })
+}
+
+// ── Story/concept handlers ─────────────────────────────────────────────────────
+function onStoryVisitPlanet(planetId: string) { flyToPlanet(planetId, false) }
+function onHighlightConcepts(ids: string[])   { highlightedConceptIds.value = ids }
+function onNavigateToPlanet(planetId: string) {
+  if (!sceneCtx) return
+  // Close drawer immediately, zoom out to overview, then fly to new planet
+  selectedPlanet.value = null
+  sceneCtx.controls.enabled = false
+  const tl = gsap.timeline({
+    onUpdate:  () => { sceneCtx!.controls.update() },
+    onComplete: () => { flyToPlanet(planetId, true) },
+  })
+  tl.to(sceneCtx.camera.position, { x: 0, y: 0, z: 85, duration: 0.6, ease: 'power2.inOut' }, 0)
+  tl.to(sceneCtx.controls.target,  { x: 0, y: 0, z: 0,  duration: 0.6, ease: 'power2.inOut' }, 0)
+}
+function onOpenConcept(_id: string)           { /* future */ }
+function onOpenStory(storyId: string)         { storyReaderRef.value?.openById(storyId) }
+
+// ── Back navigation ────────────────────────────────────────────────────────────
 function navigateBack() {
   if (!sceneCtx || navigating.value) return
   navigating.value = true
   sceneCtx.controls.enabled = false
-  triggerWarp(700, 'in')   // stars converge inward — pulling back to galaxy
-  // Fade veil to black while zooming out — no blank flash
-  if (veilRef.value) gsap.to(veilRef.value, { opacity: 1, duration: 0.35, ease: 'power1.in' })
-  gsap.to(sceneCtx.camera.position, {
-    x: 0, y: 0, z: 260, duration: 0.7, ease: 'power2.in',
-    onUpdate: () => { sceneCtx!.controls.update() },
-    onComplete: () => { router.push({ name: 'galaxy', params: { id: route.params.id } }) },
+  // Step 1: fade to black (0.35s)
+  if (veilRef.value) gsap.to(veilRef.value, {
+    opacity: 1, duration: 0.35, ease: 'power1.in',
+    onComplete: () => {
+      // Step 2: warp 'in' plays on the pure-black screen (stars shoot inward)
+      triggerWarp(700, 'in')
+      // Step 3: navigate partway through warp so new scene loads while stars are flying
+      setTimeout(() => {
+        router.push({ name: 'galaxy', params: { id: route.params.id } })
+      }, 380)
+    },
   })
 }
 
-// ── Mount ─────────────────────────────────────────────────────────────────────
-onMounted(async () => {
-  if (!containerRef.value) return
+// ── Lifecycle ──────────────────────────────────────────────────────────────────
+const { triggerWarp } = useWarpEffect()
 
-  const id = route.params.id as string
-  if (!galaxy.value || galaxy.value.meta.id !== id) {
-    try { await loadGalaxy(id) } catch { setGalaxy(MOCK_GALAXY) }
-  }
+onMounted(() => {
+  if (!meshData.value) loadFromFixture(galaxyFixture)
+  if (!containerRef.value) return
 
   const isMobile = window.innerWidth < 768
   sceneCtx = useThreeScene(containerRef.value, {
-    bloomStrength:  0.28,   // much softer — sun still glows, entries get subtle halo
+    bloomStrength:  0.35,
     bloomRadius:    0.4,
-    bloomThreshold: 0.07,   // low enough for varied entry emissive to catch bloom
+    bloomThreshold: 0.07,
     starCount: 1000,
     cameraZ: isMobile ? 130 : 85,
     enableDamping: true,
   })
 
-  // Stronger fill light so textures read properly
-  sceneCtx.scene.add(new THREE.AmbientLight(0x2a3a5a, 3.2))
+  // Extra ambient for texture visibility
+  sceneCtx.scene.add(new THREE.AmbientLight(0x2a3a5a, 3.5))
 
-  raycaster = new THREE.Raycaster()
-  mouse     = new THREE.Vector2()
+  raycaster    = new THREE.Raycaster()
+  occlusionRay = new THREE.Raycaster()
+  mouse        = new THREE.Vector2()
 
+  // Hook per-frame into render loop
   const originalRender = sceneCtx.composer.render.bind(sceneCtx.composer)
   sceneCtx.composer.render = function () {
-    onFrame()
+    onFrame(sceneCtx!.clock.getElapsedTime())
     originalRender()
   }
 
-  buildSolarSystem()
+  buildScene()
 
-  // Fade in from veil
-  if (veilRef.value) gsap.fromTo(veilRef.value, { opacity: 1 }, { opacity: 0, duration: 0.4, ease: 'power1.out' })
+  // Arrival: just fade the veil out — warp already played during departure from GalaxyView
+  if (veilRef.value) gsap.fromTo(veilRef.value, { opacity: 1 }, { opacity: 0, duration: 0.5, delay: 0.15, ease: 'power1.out' })
 
   if (!isMobile) containerRef.value.addEventListener('mousemove', onMouseMove)
   containerRef.value.addEventListener('click', onClick)
@@ -597,90 +669,66 @@ onUnmounted(() => {
   background: #02040a; opacity: 0; pointer-events: none;
 }
 
-/* Back button */
 .back-btn {
-  position: absolute; top: 24px; left: 24px; z-index: 20;
+  position: absolute; top: 24px; left: 72px; z-index: 20;
   display: flex; align-items: center; gap: 7px;
   padding: 8px 16px 8px 12px;
   background: rgba(5,8,20,0.6); border: 1px solid rgba(255,255,255,0.07);
-  border-radius: 100px; font-family: 'Space Grotesk', sans-serif;
+  border-radius: 100px;
   font-size: 12px; font-weight: 500; color: #8a9ab8; cursor: pointer;
   transition: color 0.2s, border-color 0.2s, background 0.2s;
   backdrop-filter: blur(12px);
 }
-.back-btn:hover { color: #e8ecf2; border-color: rgba(255,255,255,0.15); background: rgba(5,8,20,0.8); }
-
-@media (max-width: 767px) {
-  .back-btn { top: auto; bottom: 32px; left: 24px; }
+.back-btn:hover {
+  color: rgba(255,255,255,0.85); border-color: rgba(255,255,255,0.15);
+  background: rgba(10,14,30,0.8);
 }
 
-/* System HUD */
 .system-hud {
-  position: absolute; top: 24px; left: 50%; transform: translateX(-50%);
+  position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
   text-align: center; pointer-events: none; z-index: 10;
 }
-.system-name { font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 600; color: #e8ecf2; letter-spacing: 0.02em; margin-bottom: 4px; }
-.system-brief { font-family: 'Nunito', sans-serif; font-size: 12px; color: #8a9ab8; max-width: 280px; }
+.system-name { font-size: 16px; font-weight: 600; color: rgba(255,255,255,0.88); letter-spacing: 0.03em; }
+.system-meta { font-size: 11px; color: rgba(255,255,255,0.3); margin-top: 3px; }
 
-/* Entry count */
-.entry-count {
-  position: absolute; top: 24px; right: 24px; z-index: 10;
-  font-family: 'Space Grotesk', sans-serif; font-size: 11px;
-  color: #3a4558; text-transform: uppercase; letter-spacing: 0.06em; pointer-events: none;
+/* Soul overlays */
+.soul-overlay {
+  position: absolute; width: 20px; height: 24px;
+  cursor: pointer; pointer-events: auto; transform-origin: bottom center;
+  animation: soul-bob 3.2s ease-in-out infinite;
+  filter: drop-shadow(0 0 5px var(--soul-color));
+  z-index: 20; transition: filter 0.3s;
 }
-
-/* HTML node labels */
-.node-label {
-  position: absolute; transform: translateX(-50%);
-  pointer-events: none; z-index: 10;
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-  transition: opacity 0.12s ease;
+.soul-overlay:nth-child(2n) { animation-delay: -1.3s; }
+.soul-overlay:nth-child(3n) { animation-delay: -2.5s; }
+.soul-overlay.highlighted {
+  filter: drop-shadow(0 0 10px var(--soul-color)) drop-shadow(0 0 18px var(--soul-color));
+  animation-duration: 1.5s;
 }
-.lbl-top-row {
-  display: flex; align-items: center; gap: 5px;
-}
-.visited-dot {
-  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
-  border: 1px solid rgba(255,255,255,0.08);
-  background: transparent;
-  transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
-}
-.visited-dot.is-visited {
-  background: var(--lc);
-  border-color: var(--lc);
-  box-shadow: 0 0 4px color-mix(in srgb, var(--lc) 40%, transparent);
-}
-.lbl-kind {
-  font-family: 'Space Grotesk', sans-serif; font-size: 11px;
-  text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600;
-  color: #e0e6f0;
-  text-shadow:
-    0 1px 0 rgba(0,0,0,1), 0 -1px 0 rgba(0,0,0,1),
-    1px 0 0 rgba(0,0,0,1), -1px 0 0 rgba(0,0,0,1),
-    0 0 10px rgba(0,0,0,0.9),
-    0 0 8px color-mix(in srgb, var(--lc) 60%, transparent);
-  line-height: 1;
-}
-.lbl-title {
-  font-family: 'Space Grotesk', sans-serif; font-size: 13px; font-weight: 700;
-  letter-spacing: 0.02em; white-space: nowrap; line-height: 1.2;
-  color: #e8ecf2;
-  text-shadow:
-    0 1px 0 rgba(0,0,0,1), 0 -1px 0 rgba(0,0,0,1),
-    1px 0 0 rgba(0,0,0,1), -1px 0 0 rgba(0,0,0,1),
-    0 0 14px color-mix(in srgb, var(--lc) 50%, transparent),
-    0 2px 8px rgba(0,0,0,1);
+.soul-svg { width: 100%; height: 100%; }
+@keyframes soul-bob {
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50% { transform: translateY(-5px) rotate(2deg); }
 }
 
-/* Tooltip */
-.node-tooltip {
-  position: absolute; pointer-events: none; z-index: 30; max-width: 190px;
-  background: rgba(5,8,18,0.88); border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 10px; padding: 8px 13px; backdrop-filter: blur(16px);
+/* Planet labels */
+.planet-label {
+  position: absolute;
+  font-size: 10px; font-weight: 500;
+  color: rgba(255,255,255,0.7);
+  pointer-events: none; transform: translateX(-50%);
+  white-space: nowrap; letter-spacing: 0.03em;
+  text-shadow: 0 0 8px rgba(0,0,0,0.85);
+  z-index: 15;
 }
-.tooltip-brief { font-family: 'Nunito', sans-serif; font-size: 11px; color: #6f7989; line-height: 1.4; }
+
+/* Flying soul */
+.flying-soul {
+  position: fixed; pointer-events: none; z-index: 9999;
+}
+.flying-soul svg { width: 100%; height: 100%; filter: drop-shadow(0 0 8px white); }
 
 /* Transitions */
-.fade-enter-active, .fade-leave-active { transition: opacity 0.4s ease; }
+.fade-enter-active, .fade-leave-active { transition: opacity 0.35s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>
