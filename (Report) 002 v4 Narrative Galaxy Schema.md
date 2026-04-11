@@ -29,7 +29,7 @@ galaxies/<galaxy-id>/
     Media/                            <- images, generated media
   Mesh/
     (Source) <Name>.md
-    (Galaxy) <Name>.md
+    (Solar System) <Name>.md
     (Planet) <Name>.md
     (Concept) <Name>.md
     (Story) <Name>.md
@@ -77,14 +77,14 @@ vs specificity) and a final section on Monte Carlo methods.
 | `media-ref` | string | Path to raw file within `Media/Sources/` |
 | Body | markdown | Summary of the source document |
 
-#### (Galaxy)
+#### (Solar System)
 
-The root document. One per galaxy. Describes the galaxy as a whole. Does NOT reference stories — stories are independent and can span galaxies.
+The root document. One per solar system. Describes the solar system as a whole. Does NOT reference stories — stories are independent and can span solar systems.
 
 ```markdown
 ---
 id: <uuid>
-type: galaxy
+type: solar-system
 planets:
   - "[[(Planet) Childhood Memories]]"
   - "[[(Planet) First Day of Uni]]"
@@ -94,9 +94,9 @@ concepts:
   - "[[(Concept) Bayes Theorem]]"
 ---
 
-# My Life Galaxy
+# My Life
 
-A galaxy built from journal entries, university lecture notes,
+A solar system built from journal entries, university lecture notes,
 and family photographs spanning 2018-2024. The dominant themes
 are education, personal growth, and the quiet accumulation of
 identity through ordinary experiences.
@@ -107,10 +107,10 @@ identity through ordinary experiences.
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | UUID | Unique identifier |
-| `type` | `"galaxy"` | Always "galaxy" |
-| `planets` | WikiLink[] | All planets in this galaxy |
-| `concepts` | WikiLink[] | All concepts in this galaxy |
-| Body | markdown | Galaxy description — mood, themes, scope |
+| `type` | `"solar-system"` | Always "solar-system" |
+| `planets` | WikiLink[] | All planets in this solar system |
+| `concepts` | WikiLink[] | All concepts in this solar system |
+| Body | markdown | Solar system description — mood, themes, scope |
 
 Note: no `stories` field. Stories reference planets/concepts, not the other way around.
 
@@ -339,11 +339,11 @@ interface Source {
   markdown: string;        // summary body
 }
 
-// ─── Galaxy ───────────────────────────────────────
+// ─── Solar System ────────────────────────────────
 
-interface Galaxy {
+interface SolarSystem {
   id: UUID;
-  type: "galaxy";
+  type: "solar-system";
   title: string;
   planets: UUID[];         // resolved from wikilinks in frontmatter
   concepts: UUID[];        // resolved from wikilinks in frontmatter
@@ -404,10 +404,10 @@ interface Media {
 // ─── Full Galaxy Response ─────────────────────────
 
 interface GalaxyData {
-  galaxy: Galaxy;
+  solarSystems: Record<UUID, SolarSystem>;
   planets: Record<UUID, Planet>;
   concepts: Record<UUID, Concept>;
-  stories: Story[];           // independent, not keyed by galaxy
+  stories: Story[];           // independent, not keyed by solar system
   sources: Record<UUID, Source>;
   media: Record<UUID, Media>;
   wikiLinkIndex: WikiLinkIndex;  // frontend wikilink resolution
@@ -449,7 +449,7 @@ For each file, based on `type` in frontmatter:
 - Extract `filename`, `media-ref` from frontmatter
 - Body -> `markdown`
 
-**Galaxy:**
+**Solar System:**
 - Resolve `planets[]` and `concepts[]` wikilinks to UUIDs via index
 - Body -> `markdown`
 
@@ -471,7 +471,7 @@ For each file, based on `type` in frontmatter:
 
 ```typescript
 const data: GalaxyData = {
-  galaxy,                    // the single (Galaxy) entity
+  solarSystems,              // Record<UUID, SolarSystem>
   planets,                   // Record<UUID, Planet>
   concepts,                  // Record<UUID, Concept>
   stories,                   // Story[]
@@ -634,7 +634,7 @@ Three stages. Claude Code runs in a loop per stage until the output is valid.
 | Stage | Input | Output | Done when |
 |-------|-------|--------|-----------|
 | **1 — Ingest** | Raw files in `Media/Sources/` | `(Source) *.md` with summaries | Every uploaded file has a source file |
-| **2 — Structure** | `(Source)` files | `(Galaxy)`, `(Planet)`, `(Concept)` files | Valid entities with connections, all wikilinks resolve |
+| **2 — Structure** | `(Source)` files | `(Solar System)`, `(Planet)`, `(Concept)` files | Valid entities with connections, all wikilinks resolve |
 | **3 — Stories** | Planets + Concepts | `(Story) *.md` | Long-form narratives with intro/scenes/conclusion, planet links resolve |
 
 **Stage 1 — Ingest:**
@@ -644,7 +644,7 @@ Three stages. Claude Code runs in a loop per stage until the output is valid.
 
 **Stage 2 — Structure:**
 - Read all `(Source)` files
-- Produce `(Galaxy)` root document with description
+- Produce `(Solar System)` root documents with descriptions
 - Produce `(Planet)` files — concrete knowledge nodes, self-contained
 - Produce `(Concept)` files — flexible nodes, whatever fits
 - Wire up connections in frontmatter wikilinks
@@ -679,10 +679,10 @@ Three stages. Claude Code runs in a loop per stage until the output is valid.
 ## Conclusions
 
 - The v4 schema is a complete rewrite of the data model — from JSON blob to markdown mesh
-- Five entity types: Source, Galaxy, Planet, Concept, Story
+- Five entity types: Source, Solar System, Planet, Concept, Story
 - Server parses the workspace into a `GalaxyData` JSON response with a `wikiLinkIndex` for frontend rendering
 - Frontend builds 3D graph from planet/concept connections, renders markdown with clickable wikilinks, and provides a story reader that tracks through the galaxy
-- Pipeline is 3 stages: Ingest (source summaries), Structure (galaxy/planets/concepts), Stories (long-form narrative)
+- Pipeline is 3 stages: Ingest (source summaries), Structure (solar systems/planets/concepts), Stories (long-form narrative)
 - Input is any data. Output is a navigable narrative galaxy.
 
 ## References
