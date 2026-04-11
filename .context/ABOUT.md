@@ -25,7 +25,7 @@ Scholar System is an AI-powered platform that transforms any uploaded content �
 
 ### Content Pipeline
 
-**Architecture: Claude Code writes markdown directly into a workspace.** Each galaxy has a workspace folder containing `Media/` (uploaded files) and `Mesh/` (typed markdown files with YAML frontmatter and `[[(Type) Name]]` wikilinks). Pipeline stages are Claude Code sessions. The server parses the workspace into a `GalaxyData` JSON response.
+**Architecture: `apps/server-gemini/` is the live backend wired to the frontend.** Each galaxy has a workspace folder containing uploaded media plus a markdown mesh of typed `.md` files with YAML frontmatter and `[[(Type) Name]]` wikilinks. The Gemini pipeline writes the mesh, and the server parses that workspace into the `GalaxyData` JSON the client consumes.
 
 **The markdown mesh is the source of truth.**
 
@@ -59,12 +59,11 @@ The galaxy is a Three.js scene with a force-directed layout. Solar systems appea
 **Frontend.** Vue 3 + Vite + TypeScript, Tailwind v4, Vue Router, Three.js, D3 Force-3D, GSAP.
 
 **Backend.** Bun + Hono + TypeScript:
-- **API server** (`apps/server/`) — workspace parser, pipeline orchestration, JSON API.
-- **Workspace proxy** (`apps/proxy/`) — Claude Code worker pool, per-galaxy workspaces.
+- **API server** (`apps/server-gemini/`) — live backend used by the frontend. Handles upload, pipeline orchestration, SQLite metadata/cache, mesh parsing, and the `/api/galaxy/*` API on port `8889`.
 
 **Shared types** in `packages/shared/` — TypeScript types for the GalaxyData API.
 
-**AI.** All content generation via Claude Code sessions writing markdown into the workspace.
+**AI.** Content generation currently runs through direct Gemini API calls inside `apps/server-gemini/`.
 
 **Deliberately not used.** No Redis, Postgres, S3, auth, SQLite for content. UUID URL = access key. SSE for pipeline progress.
 
@@ -73,6 +72,11 @@ The galaxy is a Three.js scene with a force-directed layout. Solar systems appea
 ## Project Structure
 
 - `apps/client/` — Vue 3 + Three.js frontend
-- `apps/server/` — Bun + Hono API server, workspace parser, pipeline orchestration
-- `apps/proxy/` — Workspace manager + Claude Code worker pool
+- `apps/server-gemini/` — active Bun + Hono backend used by the frontend
 - `packages/shared/` — Shared TypeScript types
+
+## Integration Status
+
+- The frontend is now linked directly to `apps/server-gemini/`.
+- Dev flow is `apps/client/` on port `8888` proxying `/api/*` to `apps/server-gemini/` on port `8889`.
+- The old `apps/server/` + `apps/proxy/` stack is legacy and can be removed once repo scripts/docs are cleaned up.

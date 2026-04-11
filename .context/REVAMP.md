@@ -28,7 +28,7 @@ The data model moved from a JSON blob in SQLite to a **markdown mesh** — a wor
 
 - 3D force-directed graph concept (Three.js)
 - Chat landing + history UI
-- Proxy architecture (Claude Code worker pool)
+- Backend swapability at the client boundary (the old proxy/Claude worker architecture was preserved during the bake-off, but `apps/server-gemini/` is now the live backend)
 - File extractors (PDF, text, etc.)
 - Solar system drill-down navigation (repurposed for new entity types)
 
