@@ -1,36 +1,42 @@
 # Pipeline
 
-The content engine. Takes raw user input and produces a fully populated `Galaxy` blob. Runs in six stages plus one on-demand stage, grouped into four phases.
+The content engine. Takes raw user uploads and produces a galaxy workspace full of typed markdown files.
 
-## Stage order
+> **v4 NOTE:** The pipeline is being rewritten. The current code implements the v3 pipeline (JSON blob, 4 stages). The target is below.
+
+## Target: 3-Stage Pipeline (v4)
 
 ```
-0. Ingest      (parsing/ingest.ts)       meta, source, pipeline
-1. Structure   (parsing/structure.ts)    knowledge, relationships
-2. Detail      (parsing/detail.ts)       detail                     (parallel chunks)
-3. Narrative   (storyline/narrative.ts)  narrative                  (blocks on 2)
-4. Layout      (worldgen/layout.ts)      spatial                    (runs parallel with 3)
-5. Visuals     (worldgen/visuals.ts)     visuals                    (blocks on 3 + 4)
-6. Scene       (gameplay/scene.ts)       scenes[bodyId]             (on-demand, per landing)
+1. Ingest     → (Source) files with summaries           (Claude Code session)
+2. Structure  → (Solar System), (Planet), (Concept)     (Claude Code session)
+3. Stories    → (Story) files                           (Claude Code session)
 ```
 
-## Phases
+Each stage is a Claude Code session that writes markdown files into the galaxy workspace's `Mesh/` directory. Claude Code runs in a loop per stage until the output validates.
 
-- **`parsing/`** — turning raw input into structured knowledge. Stages 0-2.
-- **`storyline/`** — wrapping the knowledge in a galaxy-wide story. Stage 3.
-- **`worldgen/`** — building the spatial + visual game world. Stages 4-5.
-- **`gameplay/`** — generating the interactive content the user actually plays. Stage 6, on-demand.
+### Stage 1 — Ingest
 
-## Rules every stage follows
+Parse uploaded files from `Media/Sources/`. Create one `(Source) Name.md` per file with a summary. The summary must capture enough context that later stages can build planets and concepts without re-reading the raw file.
 
-1. **Read and write to the `Galaxy` blob** — stages do not pass data to each other directly. The blob is the shared state.
-2. **Validate output against Zod before writing** — each stage writes to a specific scope (see `.context/SCHEMA.md`) and must validate its output against that scope's schema from `shared/types/`. Validation failures fail loudly at the stage boundary.
-3. **Update the `pipeline` scope** — every stage flips its status to `running` at start and `done` (or `error` with a message) at end. Frontend reads this to drive the "watch your galaxy form" progress UI.
-4. **Respect the mutability rules** — stages write to their own scope only. Do not modify scopes owned by other stages.
+### Stage 2 — Structure
 
-## What lives here vs `prompts/`
+Read all `(Source)` files. Produce:
+- 3-7 `(Solar System)` files — thematic groupings with planet/concept lists
+- 5-10 `(Planet)` files per solar system — concrete knowledge nodes, self-contained
+- 4-7 `(Concept)` files per solar system — flexible thematic nodes
 
-- `pipeline/<phase>/<stage>.ts` — the orchestration code: loads input from the blob, calls the spawner with a prompt, parses and validates the response, writes the result back.
-- `prompts/<phase>/<stage>.ts` — the prompt text itself. Exports a `build<Stage>Prompt()` function. Keeping prompts in their own files means you can iterate on prompt wording without touching orchestration.
+Output should reflect the size and richness of the input.
 
-The mirror between `pipeline/` and `prompts/` is intentional — for every `pipeline/worldgen/visuals.ts` there's a `prompts/worldgen/visuals.ts`.
+### Stage 3 — Stories
+
+Read all planets and concepts. Write `(Story)` files — long-form character-driven narratives (thousands of words). Each story follows one character on a themed exploration mission across planets from any solar system.
+
+## Pipeline orchestration
+
+The server invokes Claude Code sessions via the proxy worker pool. Each stage gets its own session with the workspace mounted. The Journey shard (in the Flint) provides the workflow definitions, templates, and validation rules for each stage.
+
+## What carries over from v3
+
+- File extractors (`pipeline/parsing/extract/`) — PDF, text, etc.
+- Proxy client (`lib/proxy-client.ts`) — fan-out infrastructure
+- Proxy server (`apps/proxy/`) — Claude Code worker pool

@@ -1,353 +1,268 @@
-# Galaxy Schema (v3)
+# Galaxy Schema (v4 — Markdown Mesh)
 
-The canonical data contract for Scholar System. Everything the pipeline produces, everything the frontend renders, and everything the user's exploration state touches lives inside a single `Galaxy` blob stored as JSON in SQLite, keyed by `meta.id`.
+The data model for Scholar System. Instead of a JSON blob in SQLite, each galaxy is a **workspace folder of typed markdown files** that Claude Code writes directly. The server parses the workspace and serves a `GalaxyData` JSON response.
 
-Source of truth: `packages/shared/types/` (Zod). TypeScript types are derived via `z.infer`.
+Source of truth: the markdown files in the workspace `Mesh/` directory.
 
-## 7 scopes
+## Workspace Structure
 
-| # | Scope | Produced by | Holds |
-|---|---|---|---|
-| 1 | `meta` | Stage 0 | id, schemaVersion, timestamps, title, chapters[] |
-| 2 | `source` | Stage 0 | per-chapter source units (accuracy foundation) |
-| 3 | `knowledge` | Stage 1 | clusters → groups → entries (hierarchy, flat arrays with id refs) |
-| 4 | `relationships` | Stage 1 + Stage 2 wikilinks | edges between ANY nodes — **hero data for the graph** |
-| 5 | `wraps` | Stage 2 | per-node wrap cards (the product the user sees) |
-| 6 | `exploration` | User interaction | visited / bookmarked / persisted positions |
-| 7 | `pipeline` | Every stage | per-stage status |
+```
+galaxies/<galaxy-id>/
+  Media/
+    Sources/              <- raw uploaded files (any format)
+    Media/                <- images, generated media
+  Mesh/
+    (Source) <Name>.md
+    (Solar System) <Name>.md
+    (Planet) <Name>.md
+    (Concept) <Name>.md
+    (Story) <Name>.md
+```
 
-**Dropped from v2:** `detail` (merged into `wraps`), `narrative`/`aesthetic` (each wrap has its own mood/color), `spatial` (frontend computes positions), `visuals` (frontend derives from kind+mood+color), `scenes` (wraps ARE the content), `conversations`, `progress` (replaced by `exploration`).
+- Files are named `(Type) Name.md` — no numbers, no zero-padding
+- Wikilinks are `[[(Type) Name]]`
+
+## Entity Types
+
+### (Source)
+
+One per uploaded file. Contains a summary of the source document.
+
+```yaml
+---
+id: <uuid>
+type: source
+filename: "<original filename>"
+media-ref: "Sources/<original filename>"
+---
+```
+
+Body: 2-5 paragraph summary covering what the document is, key themes, notable details, and tone.
+
+### (Solar System)
+
+Root document for a thematic grouping. Lists its planets and concepts. Does NOT reference stories.
+
+```yaml
+---
+id: <uuid>
+type: solar-system
+planets:
+  - "[[(Planet) Name]]"
+concepts:
+  - "[[(Concept) Name]]"
+---
+```
+
+Body: description of the solar system — mood, themes, scope.
+
+### (Planet)
+
+A concrete knowledge node — something tangible from the sources. Self-contained. No concept-connections.
+
+```yaml
+---
+id: <uuid>
+type: planet
+planet-connections:
+  - "[[(Planet) Name]]"
+---
+```
+
+Body: rich, detailed prose. Dense content, not summaries.
+
+### (Concept)
+
+A flexible thematic node — a theme, technique, person, pattern. Not forced to be abstract.
+
+```yaml
+---
+id: <uuid>
+type: concept
+planet-connections:
+  - "[[(Planet) Name]]"
+concept-connections:
+  - "[[(Concept) Name]]"
+---
+```
+
+Body: content for the concept.
+
+### (Story)
+
+Long-form narrative arc. One character, one themed journey across planets from any solar system.
+
+```yaml
+---
+id: <uuid>
+type: story
+---
+```
+
+Body structure:
+
+```markdown
+## Introduction
+<prose introducing the character, referencing [[(Concept) Name]] as motivation>
+
+---
+planet: [[(Planet) Name]]
+<scene narrative — character lands on planet, discovers its content>
+
+---
+planet: [[(Planet) Name]]
+<scene narrative — journey continues>
+
+(more scenes...)
+
+---
+
+## Conclusion
+<prose — what the character found, how they changed, referencing [[(Concept) Name]]>
+```
+
+## JSON API Types
+
+```typescript
+type UUID = string;
+type WikiLinkIndex = Record<string, UUID>;
+
+interface Source {
+  id: UUID;
+  type: "source";
+  title: string;
+  filename: string;
+  mediaRef: string;
+  markdown: string;
+}
+
+interface SolarSystem {
+  id: UUID;
+  type: "solar-system";
+  title: string;
+  planets: UUID[];
+  concepts: UUID[];
+  markdown: string;
+}
+
+interface Planet {
+  id: UUID;
+  type: "planet";
+  title: string;
+  planetConnections: UUID[];
+  markdown: string;
+}
+
+interface Concept {
+  id: UUID;
+  type: "concept";
+  title: string;
+  planetConnections: UUID[];
+  conceptConnections: UUID[];
+  markdown: string;
+}
+
+interface StoryScene {
+  planetId: UUID;
+  markdown: string;
+}
+
+interface Story {
+  id: UUID;
+  type: "story";
+  title: string;
+  introduction: {
+    markdown: string;
+    conceptIds: UUID[];
+  };
+  scenes: StoryScene[];
+  conclusion: {
+    markdown: string;
+    conceptIds: UUID[];
+  };
+}
+
+interface Media {
+  id: UUID;
+  filename: string;
+  url: string;
+}
+
+interface GalaxyData {
+  solarSystems: Record<UUID, SolarSystem>;
+  planets: Record<UUID, Planet>;
+  concepts: Record<UUID, Concept>;
+  stories: Story[];
+  sources: Record<UUID, Source>;
+  media: Record<UUID, Media>;
+  wikiLinkIndex: WikiLinkIndex;
+}
+```
 
 ## Pipeline
 
 ```
-0.   Ingest & Chunk  →  meta, source                     (pure code)
-1.   Structure       →  knowledge, relationships          (Claude, Sonnet 4.6)
-2.   Wraps           →  wraps (parallel per-node)         (Claude, Sonnet 4.6)
-2.5  Coverage Audit  →  wraps adjustments                 (pure code + targeted Claude)
+1. Ingest     → (Source) files                              (Claude Code)
+2. Structure  → (Solar System), (Planet), (Concept) files   (Claude Code)
+3. Stories    → (Story) files                               (Claude Code)
 ```
 
-Four stages. No layout, no visuals, no scenes, no narrative.
-
-## Scope definitions
-
-### `meta`
-
-```typescript
-{
-  id: string                    // UUID
-  schemaVersion: 3
-  title: string                 // user-supplied or AI-generated
-  createdAt: number
-  updatedAt: number
-  chapters: ChapterEntry[]
-}
-
-interface ChapterEntry {
-  id: ChapterId                 // "w1", "w2", etc.
-  uploadedAt: number
-  filename: string
-  addedNodeIds: Slug[]          // which knowledge nodes this chapter added
-}
-```
-
-### `source`
-
-```typescript
-{
-  chapters: SourceChapter[]
-}
-
-interface SourceChapter {
-  id: ChapterId
-  kind: "text" | "pdf" | "docx" | "pptx" | "image" | "chat-export"
-  filename: string
-  hash: string
-  excerpt: string               // first ~200 chars for preview
-  units: SourceUnit[]
-}
-
-interface SourceUnit {
-  id: SourceUnitId              // "w1-s-0001"
-  text: string
-  mediaUrl?: string             // for image/video source units (stretch)
-  mediaType?: "image" | "video" | "audio"
-}
-```
-
-### `knowledge`
-
-Three flat arrays with id refs. Every node carries `chapter` + `sourceRefs`.
-
-```typescript
-{
-  clusters: Cluster[]
-  groups: Group[]
-  entries: Entry[]
-}
-
-interface Cluster {
-  id: Slug                      // "w1-march-2024"
-  chapter: ChapterId
-  title: string
-  brief: string                 // ≤30 words
-  sourceRefs: Slug[]            // .min(1)
-  groupIds: Slug[]
-}
-
-interface Group {
-  id: Slug                      // "w1-new-friendships"
-  chapter: ChapterId
-  title: string
-  brief: string
-  sourceRefs: Slug[]
-  clusterId: Slug               // parent
-  entryIds: Slug[]
-}
-
-interface Entry {
-  id: Slug                      // "w1-first-day-at-uni"
-  chapter: ChapterId
-  title: string
-  brief: string                 // ≤30 words
-  sourceRefs: Slug[]
-  groupId: Slug | null          // null = loose entry (asteroid)
-  kind: EntryKind
-}
-
-type EntryKind =
-  | "moment"                    // a specific event/memory → moon
-  | "person"                    // a person/relationship → planet
-  | "place"                     // a location → planet
-  | "theme"                     // a recurring idea/pattern → star
-  | "artifact"                  // a specific object/document/photo → comet
-  | "milestone"                 // a turning point → large moon
-  | "period"                    // a time span → ringed planet
-```
-
-### `relationships`
-
-The hero data. Powers the visible edges in the 3D force graph.
-
-```typescript
-{
-  edges: RelationshipEdge[]
-}
-
-interface RelationshipEdge {
-  id: Slug
-  source: Slug                  // any node id (cluster, group, or entry)
-  target: Slug
-  type: EdgeType
-  label?: string                // human-readable: "both mention Sarah"
-  weight: number                // 0–1, drives edge brightness/thickness
-  sourceRefs: Slug[]
-  chapter: ChapterId
-}
-
-type EdgeType =
-  | "related"                   // general semantic connection
-  | "references"                // one explicitly mentions the other
-  | "temporal"                  // chronological ordering
-  | "causal"                    // source caused/led to target
-  | "contrasts"                 // in tension or opposition
-  | "involves"                  // shares a person/place/artifact
-```
-
-Cross-chapter edges are first-class. A person appearing in March and July creates an `involves` edge across clusters.
-
-### `wraps`
-
-Every node (cluster, group, entry) gets a wrap. This is what the user sees when they click anything. Keyed by node id.
-
-```typescript
-{
-  [nodeId: Slug]: ClusterWrap | GroupWrap | EntryWrap
-}
-```
-
-**Base fields (shared by all levels):**
-
-```typescript
-interface WrapBase {
-  nodeId: Slug
-  level: "cluster" | "group" | "entry"
-  headline: string              // catchy one-liner ("The month everything changed")
-  summary: string               // 2–4 sentences
-  mood: Mood
-  color: string                 // hex color hint, AI-picked
-  stats: WrapStat[]             // key numbers
-  highlights: string[]          // 2–5 standout quotes or moments
-  derivatives: Derivative[]     // verbatim source quotes (accuracy)
-  sourceRefs: Slug[]            // derived from derivatives
-}
-```
-
-**Cluster wrap (solar system):**
-
-```typescript
-interface ClusterWrap extends WrapBase {
-  level: "cluster"
-  dateRange?: string            // "March 2024", "2023 Q1"
-  topEntries: Slug[]            // 3–5 most significant entries
-  themes: string[]              // recurring themes across the cluster
-}
-```
-
-**Group wrap (orbital group):**
-
-```typescript
-interface GroupWrap extends WrapBase {
-  level: "group"
-  theme: string                 // what ties these entries together
-}
-```
-
-**Entry wrap (planet/moon/comet — the main product):**
-
-```typescript
-interface EntryWrap extends WrapBase {
-  level: "entry"
-  body: string                  // 200–300 word rich content
-  keyFacts: WrapFact[]          // extracted data points
-  connections: WrapConnection[] // highlighted links with reasons
-}
-```
-
-**Supporting types:**
-
-```typescript
-type Mood =
-  | "joyful" | "melancholic" | "energetic" | "peaceful"
-  | "tense" | "nostalgic" | "triumphant" | "curious"
-  | "bittersweet" | "determined"
-
-interface WrapStat {
-  label: string                 // "Times mentioned"
-  value: string                 // "5"
-}
-
-interface WrapFact {
-  label: string                 // "When"
-  value: string                 // "March 15, 2024"
-}
-
-interface WrapConnection {
-  targetId: Slug
-  reason: string                // "Both involve Sarah"
-}
-
-interface Derivative {
-  sourceRef: Slug               // which source unit
-  quote: string                 // verbatim passage
-}
-```
-
-### `exploration`
-
-```typescript
-{
-  visited: Record<Slug, {
-    firstVisitedAt: number
-    lastVisitedAt: number
-    visitCount: number
-  }>
-  bookmarked: Slug[]
-  positions?: Record<Slug, { x: number; y: number; z: number }>
-}
-```
-
-`positions` is optional — lets the frontend persist the force-graph layout between sessions so nodes don't jump around on reload. Written by the frontend, not the pipeline.
-
-### `pipeline`
-
-```typescript
-{
-  ingest:    StageStatus        // Stage 0
-  structure: StageStatus        // Stage 1
-  wraps:     StageStatus        // Stage 2
-  coverage:  StageStatus        // Stage 2.5
-}
-
-interface StageStatus {
-  status: "pending" | "running" | "complete" | "error"
-  startedAt?: number
-  completedAt?: number
-  error?: string
-}
-```
-
-## Source units & accuracy model
-
-Unchanged. The derivative/coverage system carries over exactly.
-
-- Ingest chunks every source into stable numbered units at Stage 0
-- Every wrap carries `derivatives[]` (verbatim quotes) and `sourceRefs`
-- Hybrid coverage check after Stage 2: unit-level (95% gate) + word-level (quality metric)
-- Gap auditor closes coverage gaps (max 3 rounds)
-
-## Knowledge hierarchy
-
-| Level | Galaxy analogy | Interactive? |
-|---|---|---|
-| Cluster | Solar system | Click to drill in, see cluster wrap |
-| Group | Orbital group | Visual grouping, see group wrap |
-| Entry | Planet / moon / comet / star | Click for entry wrap card |
-
-Body type derived from `EntryKind`:
-| Kind | Body mesh |
-|---|---|
-| `moment` | Moon (small, smooth) |
-| `person` | Planet (large, atmospheric) |
-| `place` | Planet (textured) |
-| `theme` | Star (glowing, emissive) |
-| `artifact` | Comet (trailing particles) |
-| `milestone` | Large moon (bright, prominent) |
-| `period` | Ringed planet |
-
-Visual appearance (color, glow, particles) derived from wrap `mood` + `color`. Zero Claude calls for visuals.
-
-## ID discipline
-
-Unchanged. Chapter-prefixed kebab-case slugs everywhere, validated via `Slug` Zod schema (`^[a-z][a-z0-9]*-[a-z][a-z0-9-]*$`).
-
-## Mutability zones
-
-- **Immutable once written**: `meta.id`, `meta.createdAt`, existing source units
-- **Append-only across chapters**: `meta.chapters[]`, `knowledge.*[]`, `relationships.edges[]`, `wraps` (existing wraps frozen, new wraps added)
-- **Mutable**: `exploration`, `pipeline`, `meta.updatedAt`, `meta.title`
-
-## Partial validity
-
-The blob must be loadable at every intermediate pipeline state. Frontend must not assume any scope beyond `meta` + `source` + `pipeline` is populated.
-
-- `knowledge` is nullable (null = Stage 1 hasn't run)
-- `relationships` defaults to `{ edges: [] }`
-- `wraps` defaults to `{}`
-- `exploration` starts with empty visited/bookmarked
-- Always check `pipeline[stageName].status`, never infer state from data presence
-
-## Chapter extensions
-
-Additive, not destructive. Upload more data → Stage 0 chunks new → Stage 1 adds new nodes + discovers cross-chapter edges → Stage 2 generates wraps for new nodes only → Stage 2.5 audits. Existing wraps frozen. Frontend force-graph incorporates new nodes naturally.
-
-## What the frontend needs
-
-The frontend builds entirely from:
-1. `knowledge` — nodes and hierarchy (what to render in the force graph)
-2. `relationships` — edges (connections between nodes)
-3. `wraps` — content for click interactions (what to show)
-4. Entry `kind` + wrap `mood` + `color` — visual appearance (how to render)
-5. `pipeline` — loading states
-
-Clean, complete contract. Frontend can start with mock data immediately.
-
-## What the blob does NOT contain
-
-- Raw uploaded files (discarded after extraction)
-- Workspace markdown files (scratchpad, rehydrated on demand)
-- 3D positions from the pipeline (computed client-side by force-graph)
-- Visual parameters (derived client-side from kind + mood + color)
-- Prompt strings or raw model outputs
-- Client-side view state beyond exploration (zoom, pan → URL/localStorage)
-- User identity (UUID URL = access key)
+Three stages. Claude Code runs in a loop per stage until the output validates.
+
+## Server Parsing
+
+### Step 1: Build WikiLink Index
+
+Scan all `.md` files in `Mesh/`. For each:
+1. Parse filename `(Type) Name.md` -> type + name
+2. Parse frontmatter -> extract `id`
+3. Index: `"(Type) Name"` -> UUID
+
+### Step 2: Parse Entities
+
+**Source:** extract `filename`, `media-ref` from frontmatter. Body -> `markdown`.
+
+**Solar System:** resolve `planets[]` and `concepts[]` wikilinks to UUIDs. Body -> `markdown`.
+
+**Planet:** resolve `planet-connections[]` to UUIDs. Body -> `markdown` (wikilinks kept for frontend).
+
+**Concept:** resolve `planet-connections[]` and `concept-connections[]` to UUIDs. Body -> `markdown`.
+
+**Story:**
+1. Split on `## Introduction`, `---` separators, `## Conclusion`
+2. For each `---` block: extract `planet: [[(Planet) Name]]`, resolve to UUID -> `scene.planetId`
+3. For intro/conclusion: extract all `[[(Concept) Name]]` wikilinks -> `conceptIds[]`
+
+### Step 3: Assemble GalaxyData
+
+Combine into `GalaxyData` with the `wikiLinkIndex` for frontend rendering.
+
+## Frontend Wikilink Resolution
+
+The frontend renders markdown bodies. When it encounters `[[(Type) Name]]`:
+
+1. Look up in `wikiLinkIndex` -> get UUID
+2. Determine type from the `(Type)` prefix
+3. Render as clickable `<a>` that navigates:
+   - Planet -> zoom camera to planet in 3D view
+   - Concept -> show concept overlay
+   - Story -> open story reader
+
+Image embeds `![[filename]]` resolve to `Media/Media/filename` served URL.
+
+## Sizing Guidelines
+
+- 3-7 solar systems per galaxy workspace
+- 5-10 planets per solar system
+- 4-7 concepts per solar system
+- Output should reflect the size and richness of the input
+
+## Key Design Decisions
+
+1. **Markdown IS the data** — no JSON blob, no SQLite for content. The workspace of `.md` files is the source of truth.
+2. **Planets are self-contained** — no concept-connections on planets. Concepts connect TO planets.
+3. **Stories are independent** — not owned by a solar system. Can span across solar systems.
+4. **Stories are literature** — thousands of words. Character development arcs. Not summaries.
+5. **Concepts are flexible** — not necessarily abstract. Whatever fits the narrative.
+6. **Two resolution layers** — markdown uses `[[wikilinks]]` (human-readable). JSON API uses UUIDs. Server bridges them.
+7. **Real UUID generation** — every entity needs a real UUID v4. No fake or placeholder UUIDs.
