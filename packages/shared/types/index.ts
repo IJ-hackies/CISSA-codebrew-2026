@@ -7,3 +7,4 @@ export * from "./wraps";
 export * from "./exploration";
 export * from "./pipeline";
 export * from "./galaxy";
+export * from "./mesh";

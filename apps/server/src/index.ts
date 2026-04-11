@@ -6,6 +6,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { galaxyRoutes } from "./routes/galaxy";
+import { meshRoutes } from "./routes/mesh";
 
 const app = new Hono();
 
@@ -16,6 +17,7 @@ app.use("*", cors());
 app.get("/api/health", (c) => c.json({ ok: true, service: "scholarsystem" }));
 
 app.route("/api/galaxy", galaxyRoutes);
+app.route("/api/mesh", meshRoutes);
 
 const port = Number(process.env.PORT ?? 8889);
 console.log(`[server] listening on http://localhost:${port}`);
