@@ -1,224 +1,344 @@
 <template>
-  <!-- Book button trigger -->
-  <button v-if="!open" class="story-trigger" @click="open = true" title="Stories">
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <path d="M3 3.5C3 2.67 3.67 2 4.5 2H14v14H4.5A1.5 1.5 0 0 1 3 14.5V3.5z" stroke="currentColor" stroke-width="1.4"/>
-      <path d="M14 2l.5.5M3 13h11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-      <path d="M6 6h6M6 9h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+  <!-- Trigger button when closed. Shows a "resume" affordance when there's
+       an active story preserved (e.g. after collapsing for a planet drawer
+       or arriving via cross-system traversal). The colored left border is
+       the indicator — keeps width identical to the default state so the
+       Galaxy back button doesn't get pushed around. -->
+  <button
+    v-if="!open"
+    class="story-trigger"
+    :class="{ 'has-resume': !!activeStory }"
+    :style="activeStory ? { '--resume-accent': storyColorFor(activeStory.id) } : undefined"
+    :aria-label="activeStory ? `Resume ${activeStory.title}` : 'Stories'"
+    @click="handleTriggerClick"
+  >
+    <svg width="16" height="16" viewBox="0 0 17 17" fill="none">
+      <path d="M3 3.5C3 2.67 3.67 2 4.5 2H13v13H4.5A1.5 1.5 0 0 1 3 13.5V3.5z" stroke="currentColor" stroke-width="1.4"/>
+      <path d="M13 2l.5.5M3 12h10M6 6h5M6 9h3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
     </svg>
+    <span class="trigger-label">Stories</span>
   </button>
 
-  <Transition name="story-panel">
-    <div v-if="open" class="story-panel" :class="{ mobile: isMobile, 'has-story': !!activeStory }">
+  <DrawerShell
+    :open="open"
+    side="left"
+    :can-go-back="canGoBack || !!activeStory"
+    @close="handleClose"
+    @back="handleBack"
+  >
+    <!-- LIST MODE ---------------------------------------------------------- -->
+    <template v-if="!activeStory" #body>
+      <div class="list-wrap">
+        <div class="list-tag">Stories</div>
+        <div class="list-title">Narrative arcs</div>
+        <div class="list-meta">{{ stories.length }} character-driven journeys</div>
 
-      <!-- Story list -->
-      <template v-if="!activeStory">
-        <div class="panel-header">
-          <span class="panel-title">Stories</span>
-          <button class="panel-close" @click="open = false">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-              <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-            </svg>
-          </button>
-        </div>
-        <div class="story-list">
+        <div class="story-cards">
           <button
             v-for="story in stories"
             :key="story.id"
-            class="story-item"
-            @click="openStory(story.id)"
+            class="story-list-card"
+            :style="cardStyle(story.id)"
+            @click="openStoryById(story.id)"
           >
-            <div class="story-item-icon">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M2 2.5C2 1.67 2.67 1 3.5 1H11v12H3.5A1.5 1.5 0 0 1 2 11.5V2.5z" stroke="currentColor" stroke-width="1.2"/>
-                <path d="M4.5 4.5h5M4.5 7h3.5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
-              </svg>
+            <div class="list-card-top">
+              <div class="list-card-accent" />
+              <div class="list-card-title">{{ story.title }}</div>
             </div>
-            <div class="story-item-text">
-              <span class="story-item-title">{{ story.title }}</span>
-              <span class="story-item-meta">{{ story.scenes.length }} scenes</span>
+            <div class="list-card-stats">
+              <div class="list-stat">
+                <div class="list-stat-label">visits</div>
+                <div class="list-stat-value">{{ storyStats(story).valueA }}</div>
+              </div>
+              <div class="list-stat">
+                <div class="list-stat-label">driven by</div>
+                <div class="list-stat-value">{{ storyStats(story).valueB }}</div>
+              </div>
+              <div class="list-stat">
+                <div class="list-stat-label">scenes</div>
+                <div class="list-stat-value">{{ story.scenes.length }}</div>
+              </div>
             </div>
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" class="story-item-arrow">
-              <path d="M3 2l4 3-4 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
           </button>
         </div>
-      </template>
+      </div>
+    </template>
 
-      <!-- Active story reader -->
-      <template v-else>
-        <div class="panel-header">
-          <button class="back-btn" @click="closeStory">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-              <path d="M8 2L4 6l4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
-          <span class="panel-title story-title">{{ activeStory.title }}</span>
-          <button class="panel-close" @click="open = false">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-              <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-            </svg>
-          </button>
+    <!-- ACTIVE STORY MODE -------------------------------------------------- -->
+    <template v-else #hero>
+      <EntityHero
+        v-if="activeStory"
+        type="story"
+        :title="activeStory.title"
+        :color="storyColorFor(activeStory.id)"
+        :stats="storyStats(activeStory)"
+        :has-back="true"
+      />
+    </template>
+
+    <template v-if="activeStory" #body>
+      <!-- Scene progress bar -->
+      <div class="scene-progress">
+        <div class="progress-track">
+          <div
+            class="progress-fill"
+            :style="{ width: `${((currentSceneIndex + 1) / totalSections) * 100}%`, background: storyColorFor(activeStory.id) }"
+          />
         </div>
+        <span class="progress-label">{{ currentSceneIndex + 1 }} / {{ totalSections }}</span>
+      </div>
 
-        <!-- Scene progress bar -->
-        <div class="scene-progress">
-          <div class="progress-track">
-            <div
-              class="progress-fill"
-              :style="{ width: `${(currentSceneIndex + 1) / totalSections * 100}%` }"
-            />
+      <div class="story-content" ref="storyContentRef">
+        <!-- Introduction -->
+        <section
+          class="story-section"
+          :class="{ active: currentSceneIndex === 0 }"
+          :style="activeSectionStyle(activeStory.id)"
+          @click="setScene(0)"
+        >
+          <div class="section-tag intro-tag">Introduction</div>
+          <div class="section-body prose-sm" v-html="renderedIntro" @click="onProseClick" />
+        </section>
+
+        <!-- Scenes -->
+        <section
+          v-for="(scene, i) in activeStory.scenes"
+          :key="i + '-' + scene.planetId"
+          class="story-section"
+          :class="{ active: currentSceneIndex === i + 1 }"
+          :style="activeSectionStyle(activeStory.id)"
+          @click="setScene(i + 1)"
+        >
+          <div class="section-tag scene-tag">
+            <div class="scene-dot" :style="{ background: storyColorFor(activeStory.id) }" />
+            {{ planetTitle(scene.planetId) }}
           </div>
-          <span class="progress-label">{{ currentSceneIndex + 1 }} / {{ totalSections }}</span>
-        </div>
-
-        <!-- Scrollable content -->
-        <div class="story-content" ref="storyContentRef">
-
-          <!-- Introduction -->
-          <section
-            class="story-section"
-            :class="{ active: currentSceneIndex === 0 }"
-            @click="setScene(0)"
-          >
-            <div class="section-tag intro-tag">Introduction</div>
-            <div class="section-body prose-sm" v-html="renderedIntro" @click="onProseClick" />
-          </section>
-
-          <!-- Scenes -->
-          <section
-            v-for="(scene, i) in activeStory.scenes"
-            :key="scene.planetId"
-            class="story-section"
-            :class="{ active: currentSceneIndex === i + 1 }"
-            @click="setScene(i + 1)"
-          >
-            <div class="section-tag scene-tag">
-              <div class="scene-dot" />
-              {{ planetTitle(scene.planetId) }}
-            </div>
-            <div class="section-body prose-sm" v-html="renderScene(scene.markdown)" @click="onProseClick" />
-            <button class="visit-planet-btn" @click.stop="$emit('visit-planet', scene.planetId)">
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                <circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.2"/>
-                <circle cx="5" cy="5" r="1.2" fill="currentColor"/>
-              </svg>
-              Visit planet
-            </button>
-          </section>
-
-          <!-- Conclusion -->
-          <section
-            class="story-section"
-            :class="{ active: currentSceneIndex === totalSections - 1 }"
-            @click="setScene(totalSections - 1)"
-          >
-            <div class="section-tag outro-tag">Conclusion</div>
-            <div class="section-body prose-sm" v-html="renderedConclusion" @click="onProseClick" />
-          </section>
-        </div>
-
-        <!-- Scene navigation -->
-        <div class="scene-nav">
-          <button class="nav-btn" :disabled="currentSceneIndex === 0" @click="prevScene">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-              <path d="M8 2L4 6l4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          <div class="section-body prose-sm" v-html="renderScene(scene.markdown)" @click="onProseClick" />
+          <button class="visit-planet-btn" @click.stop="$emit('visit-planet', scene.planetId)">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.2"/>
+              <circle cx="5" cy="5" r="1.2" fill="currentColor"/>
             </svg>
+            Visit planet
           </button>
-          <span class="scene-label">{{ sceneLabel }}</span>
-          <button class="nav-btn" :disabled="currentSceneIndex === totalSections - 1" @click="nextScene">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-              <path d="M4 2l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
-        </div>
-      </template>
-    </div>
-  </Transition>
+        </section>
+
+        <!-- Conclusion -->
+        <section
+          class="story-section"
+          :class="{ active: currentSceneIndex === totalSections - 1 }"
+          :style="activeSectionStyle(activeStory.id)"
+          @click="setScene(totalSections - 1)"
+        >
+          <div class="section-tag outro-tag">Conclusion</div>
+          <div class="section-body prose-sm" v-html="renderedConclusion" @click="onProseClick" />
+        </section>
+      </div>
+    </template>
+
+    <!-- Scene nav footer -->
+    <template v-if="activeStory" #footer>
+      <div class="scene-nav">
+        <button class="nav-btn" :disabled="currentSceneIndex === 0" @click="prevScene">
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <path d="M8 2L4 6.5L8 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <span class="scene-label">{{ sceneLabel }}</span>
+        <button class="nav-btn" :disabled="currentSceneIndex === totalSections - 1" @click="nextScene">
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <path d="M5 2l4 4.5L5 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+    </template>
+  </DrawerShell>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
-import type { MeshStory, GalaxyData } from '@/lib/meshApi'
-import { useIsMobile } from '@/composables/useIsMobile'
+import { ref, computed, nextTick, watch, defineExpose } from 'vue'
+import DrawerShell from './DrawerShell.vue'
+import EntityHero from './EntityHero.vue'
+import type { MeshStory, GalaxyData, UUID } from '@/lib/meshApi'
+import { storyStats as computeStoryStats } from '@/lib/entityStats'
 
 const props = defineProps<{
   stories: MeshStory[]
   galaxyData: GalaxyData | null
+  canGoBack?: boolean
 }>()
 
 const emit = defineEmits<{
-  'visit-planet': [planetId: string]
-  'highlight-concepts': [conceptIds: string[]]
-  'navigate-to-planet': [planetId: string]
-  'open-concept': [conceptId: string]
+  'visit-planet': [planetId: UUID]
+  'highlight-concepts': [conceptIds: UUID[]]
+  'navigate-to-planet': [planetId: UUID]
+  'open-concept': [conceptId: UUID]
+  'open-story': [storyId: UUID]
+  back: []
+  close: []
+  /** Fired when the drawer transitions from closed → open. Lets the parent
+   * collapse other drawers (e.g. the planet panel) so only one rail is
+   * visible at a time. */
+  opened: []
 }>()
 
-const isMobile = useIsMobile()
 const open = ref(false)
 const activeStory = ref<MeshStory | null>(null)
-const currentSceneIndex = ref(0) // 0 = intro, 1..n = scenes, n+1 = conclusion
+const currentSceneIndex = ref(0)
 const storyContentRef = ref<HTMLDivElement>()
 
 const totalSections = computed(() =>
-  activeStory.value ? activeStory.value.scenes.length + 2 : 0
+  activeStory.value ? activeStory.value.scenes.length + 2 : 0,
 )
 
 const sceneLabel = computed(() => {
   if (!activeStory.value) return ''
   if (currentSceneIndex.value === 0) return 'Introduction'
   if (currentSceneIndex.value === totalSections.value - 1) return 'Conclusion'
-  const scene = activeStory.value.scenes[currentSceneIndex.value - 1]
-  return planetTitle(scene.planetId)
+  return planetTitle(activeStory.value.scenes[currentSceneIndex.value - 1].planetId)
 })
 
-function planetTitle(id: string): string {
-  return props.galaxyData?.planets[id]?.title ?? 'Unknown Planet'
+// ── Public helpers (for external callers like SolarSystemView) ────────────
+
+function openList() {
+  open.value = true
+  activeStory.value = null
+  currentSceneIndex.value = 0
 }
 
-function openStory(id: string) {
+function openStoryById(id: UUID) {
   const story = props.stories.find((s) => s.id === id)
   if (!story) return
+  open.value = true
   activeStory.value = story
   currentSceneIndex.value = 0
   emitHighlights()
 }
 
-function closeStory() {
+/** Open a story at a specific scene index — used to restore state after cross-system travel. */
+function openStoryAtScene(id: UUID, sceneIndex: number) {
+  const story = props.stories.find((s) => s.id === id)
+  if (!story) return
+  open.value = true
+  activeStory.value = story
+  // Bound the index to valid sections (intro = 0, scenes = 1..N, conclusion = N+1)
+  const maxIndex = story.scenes.length + 1
+  currentSceneIndex.value = Math.max(0, Math.min(sceneIndex, maxIndex))
+  emitHighlights()
+  scrollToSection(currentSceneIndex.value)
+}
+
+/**
+ * Restore story state without opening the drawer. Used on cross-system arrival
+ * — the planet drawer takes focus and the story stays collapsed-with-resume,
+ * so the user can click the trigger to pick up where they left off.
+ */
+function restoreState(id: UUID, sceneIndex: number) {
+  const story = props.stories.find((s) => s.id === id)
+  if (!story) return
+  activeStory.value = story
+  const maxIndex = story.scenes.length + 1
+  currentSceneIndex.value = Math.max(0, Math.min(sceneIndex, maxIndex))
+}
+
+/** Snapshot of the current reader state — used to capture state before cross-system travel. */
+function getCurrentState() {
+  return {
+    storyId: activeStory.value?.id ?? null,
+    sceneIndex: currentSceneIndex.value,
+    isOpen: open.value,
+  }
+}
+
+/**
+ * Close the drawer but preserve `activeStory` + `currentSceneIndex` so the
+ * trigger button shows a "resume" affordance and the user can pick up where
+ * they left off. Used when a planet drawer takes focus.
+ */
+function collapse() {
+  open.value = false
+}
+
+/** Trigger button click: resume active story if there is one, else open the list. */
+function handleTriggerClick() {
+  if (activeStory.value) {
+    open.value = true
+    emitHighlights()
+    scrollToSection(currentSceneIndex.value)
+  } else {
+    openList()
+  }
+}
+
+function closeAll() {
+  open.value = false
   activeStory.value = null
   currentSceneIndex.value = 0
 }
+
+function setActiveStory(id: UUID) {
+  openStoryById(id)
+}
+
+function backToList() {
+  activeStory.value = null
+  currentSceneIndex.value = 0
+}
+
+// Notify the parent whenever the drawer transitions to open, so it can
+// collapse the opposite drawer (one-rail-at-a-time).
+watch(open, (val, prev) => {
+  if (val && !prev) emit('opened')
+})
+
+defineExpose({
+  openById: openStoryById,
+  openByIdAtScene: openStoryAtScene,
+  restoreState,
+  collapse,
+  getCurrentState,
+  openList,
+  closeAll,
+  setActiveStory,
+  backToList,
+})
+
+// ── Shell back / close handlers ───────────────────────────────────────────
+
+function handleBack() {
+  // If an external stack is active and wants back (story stacked), forward it
+  if (props.canGoBack) {
+    emit('back')
+    return
+  }
+  // Otherwise: if reading a story, return to list
+  if (activeStory.value) backToList()
+  else open.value = false
+}
+
+function handleClose() {
+  closeAll()
+  emit('close')
+}
+
+// ── Scene navigation ──────────────────────────────────────────────────────
 
 function setScene(index: number) {
   currentSceneIndex.value = index
   scrollToSection(index)
   emitHighlights()
-  // Emit planet visit for camera tracking
   if (activeStory.value && index > 0 && index < totalSections.value - 1) {
-    const scene = activeStory.value.scenes[index - 1]
-    emit('visit-planet', scene.planetId)
+    emit('visit-planet', activeStory.value.scenes[index - 1].planetId)
   }
 }
-
-function nextScene() {
-  if (currentSceneIndex.value < totalSections.value - 1) {
-    setScene(currentSceneIndex.value + 1)
-  }
-}
-function prevScene() {
-  if (currentSceneIndex.value > 0) {
-    setScene(currentSceneIndex.value - 1)
-  }
-}
+function nextScene() { if (currentSceneIndex.value < totalSections.value - 1) setScene(currentSceneIndex.value + 1) }
+function prevScene() { if (currentSceneIndex.value > 0) setScene(currentSceneIndex.value - 1) }
 
 function emitHighlights() {
   if (!activeStory.value) return
-  let ids: string[] = []
-  if (currentSceneIndex.value === 0) {
-    ids = activeStory.value.introduction.conceptIds
-  } else if (currentSceneIndex.value === totalSections.value - 1) {
-    ids = activeStory.value.conclusion.conceptIds
-  }
+  let ids: UUID[] = []
+  if (currentSceneIndex.value === 0) ids = activeStory.value.introduction.conceptIds
+  else if (currentSceneIndex.value === totalSections.value - 1) ids = activeStory.value.conclusion.conceptIds
   emit('highlight-concepts', ids)
 }
 
@@ -231,16 +351,46 @@ function scrollToSection(index: number) {
   })
 }
 
+function planetTitle(id: UUID): string {
+  return props.galaxyData?.planets[id]?.title ?? 'Unknown'
+}
+
+function storyStats(story: MeshStory) { return computeStoryStats(story) }
+
+// ── Deterministic story color ─────────────────────────────────────────────
+
+const STORY_PALETTE = [
+  '#b5a0ff', '#ffc8e8', '#a0f0d0', '#ffeaa7',
+  '#dfe0ff', '#c8f0ff', '#ffd8b8', '#e8f4a0',
+  '#f7a8c4', '#8fd5ff',
+]
+function storyColorFor(id: UUID): string {
+  let h = 2166136261
+  for (let i = 0; i < id.length; i++) { h ^= id.charCodeAt(i); h = Math.imul(h, 16777619) }
+  const idx = Math.abs(h) % STORY_PALETTE.length
+  return STORY_PALETTE[idx]
+}
+
+function cardStyle(id: UUID) {
+  const color = storyColorFor(id)
+  return { '--accent': color } as Record<string, string>
+}
+function activeSectionStyle(id: UUID) {
+  return { '--accent': storyColorFor(id) } as Record<string, string>
+}
+
+// ── Inline markdown rendering (scene narrative) ───────────────────────────
+
 function renderWikilinks(md: string): string {
   if (!props.galaxyData) return md
   const idx = props.galaxyData.wikiLinkIndex
-  return md.replace(/\[\[([^\]]+)\]\]/g, (_match, name: string) => {
+  return md.replace(/\[\[([^\]]+)\]\]/g, (_m, name: string) => {
     const key = name.includes('/') ? name.split('/').pop()! : name
     const uuid = idx[key]
-    if (!uuid) return `<span class="wikilink-broken">${key.replace(/^\([^)]+\)\s*/, '')}</span>`
-    const typeMatch = key.match(/^\((\w[\w ]*)\)/)
-    const type = typeMatch?.[1]?.toLowerCase() ?? 'unknown'
     const label = key.replace(/^\([^)]+\)\s*/, '')
+    if (!uuid) return `<span class="wikilink-broken">${label}</span>`
+    const typeMatch = key.match(/^\((\w[\w ]*)\)/)
+    const type = typeMatch?.[1]?.toLowerCase().replace(/\s+/g, '-') ?? 'unknown'
     return `<a data-id="${uuid}" data-type="${type}" class="wikilink">${label}</a>`
   })
 }
@@ -248,7 +398,7 @@ function renderWikilinks(md: string): string {
 function mdToHtml(md: string): string {
   let html = renderWikilinks(md)
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>')
+  html = html.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
   html = html
     .split(/\n{2,}/)
     .map((p) => p.trim())
@@ -259,206 +409,210 @@ function mdToHtml(md: string): string {
 }
 
 const renderedIntro = computed(() =>
-  activeStory.value ? mdToHtml(activeStory.value.introduction.markdown) : ''
+  activeStory.value ? mdToHtml(activeStory.value.introduction.markdown) : '',
 )
 const renderedConclusion = computed(() =>
-  activeStory.value ? mdToHtml(activeStory.value.conclusion.markdown) : ''
+  activeStory.value ? mdToHtml(activeStory.value.conclusion.markdown) : '',
 )
-function renderScene(md: string): string {
-  return mdToHtml(md)
-}
+function renderScene(md: string): string { return mdToHtml(md) }
 
 function onProseClick(e: MouseEvent) {
   const target = e.target as HTMLElement
-  const link = target.closest('[data-id]') as HTMLElement | null
+  const link = target.closest('a[data-id]') as HTMLElement | null
   if (!link) return
   const id = link.dataset.id!
   const type = link.dataset.type!
   e.stopPropagation()
   if (type === 'planet') emit('navigate-to-planet', id)
   else if (type === 'concept') emit('open-concept', id)
+  else if (type === 'story') emit('open-story', id)
 }
-
-/** Called externally to open a specific story (e.g. from a wikilink click) */
-function openById(id: string) {
-  open.value = true
-  openStory(id)
-}
-
-defineExpose({ openById })
 </script>
 
 <style scoped>
+/* ── Trigger button (closed state) ──────────────────────────────────────── */
 .story-trigger {
   position: fixed;
-  top: 24px;
-  left: 24px;
-  width: 40px;
+  top: 22px;
+  left: 22px;
   height: 40px;
+  padding: 0 14px 0 11px;
   border-radius: 12px;
   background: rgba(8, 10, 20, 0.82);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(255, 255, 255, 0.65);
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 8px;
   cursor: pointer;
   z-index: 55;
-  backdrop-filter: blur(12px);
-  transition: border-color 0.2s, color 0.2s, background 0.2s;
+  backdrop-filter: blur(14px);
+  transition: background 0.18s, border-color 0.18s, color 0.18s;
 }
-.story-trigger:hover,
-.story-trigger.active {
-  border-color: rgba(255, 255, 255, 0.3);
-  color: #fff;
+.story-trigger:hover {
   background: rgba(20, 25, 45, 0.92);
+  border-color: rgba(255, 255, 255, 0.26);
+  color: #fff;
+}
+.trigger-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: rgba(255, 255, 255, 0.8);
 }
 
-.story-panel {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 340px;
-  height: 100%;
-  background: rgba(6, 8, 18, 0.94);
-  border-right: 1px solid rgba(255, 255, 255, 0.09);
-  backdrop-filter: blur(20px);
-  z-index: 50;
+/* Resume affordance: colored left edge in the active story's hue. Keeps the
+   trigger width identical to the default state — only the border changes. */
+.story-trigger.has-resume {
+  border-left: 2px solid var(--resume-accent, #b5a0ff);
+  padding-left: 9px;          /* compensate for the 2px border (default 11px) */
+  background: rgba(12, 14, 28, 0.88);
+  color: rgba(255, 255, 255, 0.85);
+  box-shadow: -1px 0 12px -2px var(--resume-accent, #b5a0ff);
+}
+.story-trigger.has-resume .trigger-label {
+  color: rgba(255, 255, 255, 0.95);
+}
+
+/* Mobile: icon-only trigger so the top bar stays uncluttered. */
+@media (max-width: 768px) {
+  .story-trigger {
+    padding: 0 11px;
+    gap: 0;
+  }
+  .story-trigger.has-resume {
+    padding-left: 9px;
+  }
+  .trigger-label { display: none; }
+}
+
+/* ── LIST MODE ─────────────────────────────────────────────────────────── */
+.list-wrap {
+  padding: 16px 24px 18px;
+}
+
+.list-title {
+  padding-right: 44px;
+}
+
+.list-tag {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 8px;
+}
+.list-title {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.15;
+  color: #fff;
+  letter-spacing: -0.01em;
+}
+.list-meta {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  margin-top: 4px;
+  margin-bottom: 22px;
+}
+
+.story-cards {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-}
-
-.story-panel.mobile {
-  width: 100vw;
-  top: auto;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 55vh;
-  border-right: none;
-  border-top: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 18px 18px 0 0;
-}
-
-.story-panel.mobile.has-story {
-  height: 72vh;
-}
-
-/* Panel header */
-.panel-header {
-  display: flex;
-  align-items: center;
   gap: 10px;
-  padding: 20px 16px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-  flex-shrink: 0;
 }
-.panel-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.8);
-  flex: 1;
-  letter-spacing: 0.01em;
-}
-.story-title {
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.panel-close,
-.back-btn {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  background: transparent;
-  border: none;
-  color: rgba(255, 255, 255, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: color 0.15s;
-}
-.panel-close:hover,
-.back-btn:hover {
-  color: rgba(255, 255, 255, 0.8);
-}
-
-/* Story list */
-.story-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px 8px;
-}
-.story-list::-webkit-scrollbar { width: 3px; }
-.story-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
-
-.story-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 10px;
-  border-radius: 10px;
-  background: transparent;
-  border: 1px solid transparent;
-  color: rgba(255, 255, 255, 0.7);
-  cursor: pointer;
-  width: 100%;
+.story-list-card {
+  position: relative;
   text-align: left;
-  transition: background 0.15s, border-color 0.15s;
-  margin-bottom: 4px;
+  padding: 14px 16px 14px 18px;
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: inherit;
+  cursor: pointer;
+  overflow: hidden;
+  transition: background 0.2s, border-color 0.2s, transform 0.2s;
 }
-.story-item:hover {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(255, 255, 255, 0.1);
+.story-list-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent, rgba(170, 200, 255, 0.6));
 }
-.story-item-icon {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  background: rgba(140, 160, 255, 0.1);
-  border: 1px solid rgba(140, 160, 255, 0.2);
+.story-list-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at 0% 0%,
+    color-mix(in srgb, var(--accent, #aac8ff) 18%, transparent) 0%,
+    transparent 60%
+  );
+  pointer-events: none;
+}
+.story-list-card:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px);
+}
+
+.list-card-top {
   display: flex;
   align-items: center;
-  justify-content: center;
-  color: rgba(140, 180, 255, 0.8);
+  gap: 8px;
+  margin-bottom: 10px;
+  position: relative;
+}
+.list-card-accent {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent, rgba(170, 200, 255, 0.8));
+  box-shadow: 0 0 8px 1px color-mix(in srgb, var(--accent, #aac8ff) 60%, transparent);
   flex-shrink: 0;
 }
-.story-item-text {
-  flex: 1;
+.list-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: -0.005em;
+  line-height: 1.25;
+}
+.list-card-stats {
+  display: flex;
+  gap: 14px;
+  position: relative;
+}
+.list-stat {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  min-width: 0;
 }
-.story-item-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.85);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.list-stat-label {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.42);
+  font-weight: 600;
 }
-.story-item-meta {
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.3);
-}
-.story-item-arrow {
-  color: rgba(255, 255, 255, 0.25);
-  flex-shrink: 0;
+.list-stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+  line-height: 1;
+  font-feature-settings: 'tnum' 1;
 }
 
-/* Scene progress */
+/* ── ACTIVE STORY ──────────────────────────────────────────────────────── */
 .scene-progress {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  flex-shrink: 0;
+  padding: 14px 22px 6px;
 }
 .progress-track {
   flex: 1;
@@ -469,74 +623,66 @@ defineExpose({ openById })
 }
 .progress-fill {
   height: 100%;
-  background: rgba(140, 180, 255, 0.7);
   border-radius: 1px;
   transition: width 0.3s ease;
 }
 .progress-label {
   font-size: 10px;
-  color: rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.38);
   white-space: nowrap;
+  font-feature-settings: 'tnum' 1;
 }
 
-/* Story content */
 .story-content {
-  flex: 1;
-  overflow-y: auto;
-  scroll-behavior: smooth;
+  padding: 4px 0 12px;
 }
-.story-content::-webkit-scrollbar { width: 3px; }
-.story-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
 
 .story-section {
-  padding: 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 14px 22px;
   cursor: pointer;
   transition: background 0.15s;
   position: relative;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
-.story-section:hover {
-  background: rgba(255, 255, 255, 0.02);
-}
-.story-section.active {
-  background: rgba(140, 180, 255, 0.04);
-}
+.story-section:last-child { border-bottom: none; }
+.story-section:hover { background: rgba(255, 255, 255, 0.02); }
+.story-section.active { background: rgba(255, 255, 255, 0.03); }
 .story-section.active::before {
   content: '';
   position: absolute;
   left: 0;
-  top: 0;
-  bottom: 0;
+  top: 14px;
+  bottom: 14px;
   width: 2px;
-  background: rgba(140, 180, 255, 0.5);
+  background: var(--accent, rgba(170, 200, 255, 0.7));
   border-radius: 0 1px 1px 0;
 }
 
 .section-tag {
   font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-weight: 700;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   margin-bottom: 8px;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
+  color: rgba(255, 255, 255, 0.55);
 }
-.intro-tag { color: rgba(200, 180, 255, 0.6); }
-.outro-tag { color: rgba(255, 200, 160, 0.6); }
-.scene-tag { color: rgba(140, 200, 180, 0.7); }
+.intro-tag { color: rgba(200, 180, 255, 0.7); }
+.outro-tag { color: rgba(255, 200, 160, 0.7); }
+.scene-tag { color: rgba(255, 255, 255, 0.6); }
 
 .scene-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: rgba(140, 200, 180, 0.6);
   flex-shrink: 0;
 }
 
 .section-body {
-  font-size: 12px;
-  line-height: 1.7;
+  font-size: 12.5px;
+  line-height: 1.72;
   color: rgba(255, 255, 255, 0.55);
   display: -webkit-box;
   -webkit-line-clamp: 4;
@@ -545,36 +691,42 @@ defineExpose({ openById })
 }
 .story-section.active .section-body {
   display: block;
-  color: rgba(255, 255, 255, 0.7);
   -webkit-line-clamp: unset;
+  color: rgba(255, 255, 255, 0.75);
 }
 
-.prose-sm :deep(p) { margin-bottom: 8px; }
+.prose-sm :deep(p) { margin: 0 0 10px; }
+.prose-sm :deep(p:last-child) { margin-bottom: 0; }
 .prose-sm :deep(.wikilink) {
-  color: rgba(140, 180, 255, 0.8);
-  text-decoration: underline;
-  text-decoration-color: rgba(140, 180, 255, 0.3);
+  color: rgba(170, 200, 255, 0.9);
+  background: rgba(170, 200, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
   cursor: pointer;
+  text-decoration: none;
 }
-.prose-sm :deep(.wikilink:hover) { color: rgb(160, 200, 255); }
+.prose-sm :deep(.wikilink:hover) { color: #fff; background: rgba(170, 200, 255, 0.18); }
+.prose-sm :deep(.wikilink-broken) { color: rgba(255, 255, 255, 0.3); text-decoration: line-through; }
 
 .visit-planet-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   font-size: 10px;
-  color: rgba(140, 200, 180, 0.7);
-  background: rgba(140, 200, 180, 0.08);
-  border: 1px solid rgba(140, 200, 180, 0.18);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 20px;
-  padding: 4px 10px;
+  padding: 5px 12px;
   cursor: pointer;
   margin-top: 10px;
   transition: background 0.15s, color 0.15s;
 }
 .visit-planet-btn:hover {
-  background: rgba(140, 200, 180, 0.15);
-  color: rgb(160, 220, 200);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
 }
 
 /* Scene nav footer */
@@ -582,17 +734,16 @@ defineExpose({ openById })
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
-  flex-shrink: 0;
+  gap: 10px;
+  padding: 12px 18px;
 }
 .nav-btn {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -600,35 +751,21 @@ defineExpose({ openById })
   transition: background 0.15s, color 0.15s;
 }
 .nav-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.12);
   color: #fff;
 }
 .nav-btn:disabled {
-  opacity: 0.25;
+  opacity: 0.22;
   cursor: default;
 }
 .scene-label {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.45);
-  max-width: 180px;
+  color: rgba(255, 255, 255, 0.5);
+  max-width: 190px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   text-align: center;
-}
-
-/* Transitions */
-.story-panel-enter-active,
-.story-panel-leave-active {
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
-}
-.story-panel-enter-from,
-.story-panel-leave-to {
-  transform: translateX(-100%);
-  opacity: 0;
-}
-.story-panel.mobile.story-panel-enter-from,
-.story-panel.mobile.story-panel-leave-to {
-  transform: translateY(100%);
+  flex: 1;
 }
 </style>
