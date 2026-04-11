@@ -12,7 +12,14 @@
 
 const API_BASE = import.meta.env.VITE_API_URL ?? ''
 
+import { getToken } from './auth'
 import type { GalaxyData } from '@scholarsystem/shared'
+
+/** Build headers with Bearer token if logged in. */
+function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const t = getToken()
+  return t ? { Authorization: `Bearer ${t}`, ...extra } : { ...extra }
+}
 
 // Re-export types so frontend components can import from one place
 export type {
@@ -68,11 +75,11 @@ export async function createGalaxy(input: CreateGalaxyInput): Promise<GalaxyEnve
     for (const f of input.files!) form.append('file', f, f.name)
     if (input.title) form.append('title', input.title)
     if (input.text) form.append('text', input.text)
-    res = await fetch(`${API_BASE}/api/galaxy/create`, { method: 'POST', body: form })
+    res = await fetch(`${API_BASE}/api/galaxy/create`, { method: 'POST', headers: authHeaders(), body: form })
   } else {
     res = await fetch(`${API_BASE}/api/galaxy/create`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         text: input.text,
         title: input.title,
@@ -103,7 +110,7 @@ export async function createGalaxy(input: CreateGalaxyInput): Promise<GalaxyEnve
 }
 
 export async function fetchGalaxyEnvelope(id: string): Promise<GalaxyEnvelope> {
-  const res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(id)}`)
+  const res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(id)}`, { headers: authHeaders() })
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
     try {
@@ -150,7 +157,7 @@ export interface GalaxyRowSummary {
 }
 
 export async function deleteGalaxy(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  const res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(id)}`, { method: 'DELETE', headers: authHeaders() })
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
     try {
@@ -162,7 +169,7 @@ export async function deleteGalaxy(id: string): Promise<void> {
 }
 
 export async function fetchGalaxyList(): Promise<GalaxyRowSummary[]> {
-  const res = await fetch(`${API_BASE}/api/galaxy`)
+  const res = await fetch(`${API_BASE}/api/galaxy`, { headers: authHeaders() })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = (await res.json()) as { galaxies: GalaxyRowSummary[] }
   return body.galaxies
@@ -179,11 +186,11 @@ export async function appendGalaxy(id: string, input: CreateGalaxyInput): Promis
     for (const f of input.files!) form.append('file', f, f.name)
     if (input.title) form.append('title', input.title)
     if (input.text) form.append('text', input.text)
-    res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(id)}/append`, { method: 'POST', body: form })
+    res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(id)}/append`, { method: 'POST', headers: authHeaders(), body: form })
   } else {
     res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(id)}/append`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ text: input.text, title: input.title, filename: input.filename }),
     })
   }
@@ -211,7 +218,7 @@ export interface Submission {
 }
 
 export async function fetchSubmissions(galaxyId: string): Promise<Submission[]> {
-  const res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(galaxyId)}/submissions`)
+  const res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(galaxyId)}/submissions`, { headers: authHeaders() })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = (await res.json()) as { submissions: Submission[] }
   return body.submissions

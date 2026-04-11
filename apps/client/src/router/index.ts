@@ -1,6 +1,13 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import { isLoggedIn } from '@/lib/auth'
 
 const routes: RouteRecordRaw[] = [
+  {
+    path: '/login',
+    name: 'login',
+    component: () => import('@/pages/LoginPage.vue'),
+    meta: { public: true },
+  },
   {
     path: '/',
     name: 'taco',
@@ -45,4 +52,9 @@ const routes: RouteRecordRaw[] = [
 export const router = createRouter({
   history: createWebHistory(),
   routes,
+})
+
+router.beforeEach((to) => {
+  if (to.meta.public || to.name === 'login') return
+  if (!isLoggedIn.value) return { name: 'login' }
 })

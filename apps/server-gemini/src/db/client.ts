@@ -50,12 +50,23 @@ export function db(): Database {
     CREATE INDEX IF NOT EXISTS submissions_galaxy_idx ON submissions(galaxy_id);
   `);
 
+  // Users table
+  _db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id            TEXT PRIMARY KEY,
+      username      TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      created_at    INTEGER NOT NULL
+    );
+  `);
+
   // Idempotent migrations — ALTER TABLE fails silently if column exists.
   const migrations = [
     `ALTER TABLE galaxies ADD COLUMN owner_token TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE galaxies ADD COLUMN is_public   INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE galaxies ADD COLUMN tagline      TEXT`,
     `ALTER TABLE galaxies ADD COLUMN last_owner_seen_at INTEGER`,
+    `ALTER TABLE galaxies ADD COLUMN user_id TEXT`,
   ];
   for (const sql of migrations) {
     try { _db.exec(sql); } catch { /* column already exists */ }
@@ -416,5 +427,51 @@ export function listSourceRows(galaxyId: string): SourceRow[] {
     mimeType: r.mime_type,
     byteSize: r.byte_size,
     createdAt: r.created_at,
+  }));
+}
+
+// ── User functions ────────────────────────────────────────────────
+
+export interface UserRow {
+  id: string;
+  username: string;
+  passwordHash: string;
+  createdAt: number;
+}
+
+export function createUser(id: string, username: string, passwordHash: string): void {
+  db()
+    .prepare(`INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)`)
+    .run(id, username, passwordHash, Date.now());
+}
+
+export function getUserByUsername(username: string): UserRow | null {
+  const row = db()
+    .prepare(`SELECT id, username, password_hash, created_at FROM users WHERE username = ?`)
+    .get(username) as { id: string; username: string; password_hash: string; created_at: number } | undefined;
+  if (!row) return null;
+  return { id: row.id, username: row.username, passwordHash: row.password_hash, createdAt: row.created_at };
+}
+
+export function setGalaxyUserId(galaxyId: string, userId: string): void {
+  db().prepare(`UPDATE galaxies SET user_id = ? WHERE id = ?`).run(userId, galaxyId);
+}
+
+export function listGalaxiesByUser(userId: string): GalaxyRow[] {
+  const rows = db()
+    .prepare(
+      `SELECT id, title, status, stage_detail, error, created_at, updated_at,
+              is_public, tagline, last_owner_seen_at
+       FROM galaxies WHERE user_id = ? ORDER BY created_at DESC`,
+    )
+    .all(userId) as Array<{
+    id: string; title: string; status: JobStatus; stage_detail: string;
+    error: string | null; created_at: number; updated_at: number;
+    is_public: number; tagline: string | null; last_owner_seen_at: number | null;
+  }>;
+  return rows.map((row) => ({
+    id: row.id, title: row.title, status: row.status, stageDetail: row.stage_detail,
+    error: row.error, createdAt: row.created_at, updatedAt: row.updated_at,
+    isPublic: row.is_public === 1, tagline: row.tagline, lastOwnerSeenAt: row.last_owner_seen_at,
   }));
 }

@@ -25,7 +25,8 @@ import {
   loadCachedGalaxyData,
   updateGalaxyStatus,
   deleteGalaxyRow,
-  listGalaxies,
+  listGalaxiesByUser,
+  setGalaxyUserId,
   type SourceRow,
 } from "../db/client";
 import { runPipeline } from "../pipeline/run";
@@ -168,6 +169,10 @@ galaxyRoutes.post("/create", async (c) => {
   const ownerToken = randomUUID();
   const paths = ensureGalaxyDirs(galaxyId);
   createGalaxyRow(galaxyId, resolved.title, ownerToken);
+
+  // Tie galaxy to authenticated user
+  const jwtPayload = c.get("jwtPayload") as { sub?: string };
+  if (jwtPayload?.sub) setGalaxyUserId(galaxyId, jwtPayload.sub as string);
 
   // Persist files to media/sources/ and index them in SQLite.
   const now = Date.now();
@@ -362,5 +367,8 @@ galaxyRoutes.delete("/:id", (c) => {
 // ── GET /api/galaxy (list) ─────────────────────────────────────────
 
 galaxyRoutes.get("/", (c) => {
-  return c.json({ galaxies: listGalaxies() });
+  const jwtPayload = c.get("jwtPayload") as { sub?: string };
+  const userId = jwtPayload?.sub as string | undefined;
+  if (!userId) return c.json({ galaxies: [] });
+  return c.json({ galaxies: listGalaxiesByUser(userId) });
 });

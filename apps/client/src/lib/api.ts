@@ -8,6 +8,13 @@
 
 const API_BASE = import.meta.env.VITE_API_URL ?? ''
 
+import { getToken } from './auth'
+
+function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const t = getToken()
+  return t ? { Authorization: `Bearer ${t}`, ...extra } : { ...extra }
+}
+
 /**
  * Minimal shape of what the frontend currently consumes from a Galaxy blob.
  * The full schema lives in `shared/types/` — import from there once the
@@ -49,12 +56,12 @@ export async function createGalaxy(input: CreateGalaxyInput): Promise<GalaxyBlob
     for (const f of input.files!) form.append('file', f, f.name)
     if (input.title) form.append('title', input.title)
     if (input.text) form.append('text', input.text)
-    res = await fetch(`${API_BASE}/api/galaxy/create`, { method: 'POST', body: form })
+    res = await fetch(`${API_BASE}/api/galaxy/create`, { method: 'POST', headers: authHeaders(), body: form })
   } else {
     // JSON paste path unchanged.
     res = await fetch(`${API_BASE}/api/galaxy/create`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         text: input.text,
         title: input.title,
@@ -76,7 +83,7 @@ export async function createGalaxy(input: CreateGalaxyInput): Promise<GalaxyBlob
 }
 
 export async function getGalaxy(id: string): Promise<GalaxyBlob> {
-  const res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(id)}`)
+  const res = await fetch(`${API_BASE}/api/galaxy/${encodeURIComponent(id)}`, { headers: authHeaders() })
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}`)
   }
@@ -91,6 +98,7 @@ export async function getGalaxy(id: string): Promise<GalaxyBlob> {
 export async function getScene(galaxyId: string, bodyId: string): Promise<unknown | null> {
   const res = await fetch(
     `${API_BASE}/api/galaxy/${encodeURIComponent(galaxyId)}/scene/${encodeURIComponent(bodyId)}`,
+    { headers: authHeaders() },
   )
   if (res.status === 404) return null
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -104,7 +112,7 @@ export async function getScene(galaxyId: string, bodyId: string): Promise<unknow
 export async function generateScene(galaxyId: string, bodyId: string): Promise<unknown> {
   const res = await fetch(
     `${API_BASE}/api/galaxy/${encodeURIComponent(galaxyId)}/scene/${encodeURIComponent(bodyId)}/generate`,
-    { method: 'POST' },
+    { method: 'POST', headers: authHeaders() },
   )
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
