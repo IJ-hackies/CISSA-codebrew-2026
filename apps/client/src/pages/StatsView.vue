@@ -146,17 +146,16 @@ import {
   mostVisitedSolarSystem,
 } from '@/lib/entityStats'
 import type { UUID } from '@/lib/meshApi'
-import galaxyFixture from '@/fixtures/galaxy-data.json'
 
 const route = useRoute()
 const router = useRouter()
-const { data, collectedConceptIds, loadFromFixture } = useMeshStore()
+const { data, collectedConceptIds, loadFromApi } = useMeshStore()
 
 const galaxyId = computed(() => (route.params.id as string) ?? 'fixture')
 
-onMounted(() => {
+onMounted(async () => {
   if (!data.value) {
-    loadFromFixture(galaxyFixture, galaxyId.value)
+    await loadFromApi(galaxyId.value)
   }
 })
 
@@ -212,7 +211,7 @@ function runCountUps() {
 onMounted(() => {
   if (data.value) runCountUps()
   else {
-    // Wait a tick for loadFromFixture to settle
+    // Wait a tick for loadFromApi to settle
     setTimeout(runCountUps, 60)
   }
 })
