@@ -1,0 +1,8 @@
+node_modules/
+.env
+galaxies/
+galaxies.db
+galaxies.db-journal
+galaxies.db-wal
+galaxies.db-shm
+*.log

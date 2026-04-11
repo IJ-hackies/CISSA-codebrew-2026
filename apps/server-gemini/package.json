@@ -1,0 +1,22 @@
+{
+  "name": "scholarsystem-server-gemini",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun --watch run src/index.ts",
+    "start": "bun run src/index.ts",
+    "run-pipeline": "bun run src/scripts/run-pipeline.ts",
+    "dump-galaxy": "bun run src/scripts/dump-galaxy.ts"
+  },
+  "dependencies": {
+    "@google/genai": "^1.49.0",
+    "gray-matter": "^4.0.3",
+    "hono": "^4.12.12",
+    "p-limit": "^7.3.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.12",
+    "typescript": "^6.0.2"
+  }
+}
