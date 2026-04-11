@@ -41,7 +41,11 @@
       "Bash(bun x:*)",
       "Bash(ls:*)",
       "Bash(bun tsc:*)",
-      "Bash(claude -p --dangerously-skip-permissions --model haiku)"
+      "Bash(claude -p --dangerously-skip-permissions --model haiku)",
+      "Bash(git branch:*)",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs",
+      "Bash(echo \"exit=$?\")"
     ]
   }
 }

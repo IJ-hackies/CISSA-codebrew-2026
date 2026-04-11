@@ -2,16 +2,18 @@
 //
 //   2a. Cluster       → partition sources into solar systems
 //   2b. Outline       → per solar system, produce planet + concept lists
-//   2c. Expand planets → per planet, rich 1500+ word body
+//   2c. Expand planets → per planet, rich body
 //   2d. Expand concepts → per concept, rich body
 //
-// After 2c and 2d finish, the mesh contains every (Solar System), (Planet),
-// and (Concept) markdown file. Story stages run next.
+// Every stage takes an `InputBudget` that scales counts and word targets
+// to the actual volume of uploaded content. Every Pro-backed stage runs
+// through a shared `proLimiter` so outline + expand + stories compete
+// fairly for one per-minute quota budget.
 
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { generateJson, MODEL_FLASH, MODEL_PRO } from "./gemini";
-import { mapLimited, mapLimitedTolerant } from "../lib/concurrency";
+import { mapViaLimiter, mapViaLimiterTolerant, type Limiter } from "../lib/concurrency";
 import {
   writeSolarSystem,
   writePlanet,
@@ -24,15 +26,14 @@ import type {
   SolarSystemCtx,
 } from "./context";
 import { allPlanetTitles, allConceptTitles } from "./context";
+import type { InputBudget } from "./budget";
+import { wordsToOutputTokens } from "./budget";
 
 // ── 2a. Cluster ─────────────────────────────────────────────────────
 //
-// Scale note: on 1000+ sources this stage was choking because we were
-// echoing full 36-char UUIDs back from the model. A 987-source list of
-// UUIDs is ~40KB of pure identifiers in the output — enough to cap out
-// Flash's output token budget. Switched to numeric indices (source's
-// position in ctx.sources) which cuts the output by >10x, and we map
-// back to UUIDs ourselves after the call.
+// Numeric indices (not UUIDs) in the response keep the output small.
+// On a 500-source run the cluster call's output used to be mostly
+// identifiers; switching to indices cut it by ~10x.
 
 const clusterSchema = z.object({
   solarSystems: z
@@ -56,7 +57,7 @@ const clusterJsonSchema = {
       minItems: 1,
       maxItems: 12,
       description:
-        "Thematic solar systems partitioning the sources. Every source index must be assigned to exactly one solar system. Aim for 3-7 systems; go up to 12 only for very large and diverse input sets.",
+        "Thematic solar systems partitioning the sources. Every source index must be assigned to exactly one solar system.",
       items: {
         type: "object",
         required: ["title", "oneLineDescription", "indices"],
@@ -76,26 +77,28 @@ const clusterJsonSchema = {
   },
 };
 
-export async function runClusterStage(ctx: PipelineContext): Promise<void> {
+export async function runClusterStage(
+  ctx: PipelineContext,
+  budget: InputBudget,
+): Promise<void> {
   const n = ctx.sources.length;
   if (n === 0) return;
 
-  // Compact input: one line per source. ~40-60 tokens each.
-  // `<idx>. <title> | themes: <csv> | tone: <word>`
+  // Compact input: one line per source.
   const lines = ctx.sources.map((s, i) => {
     const themes = s.keyThemes.slice(0, 4).join(", ");
     return `${i}. ${s.title} | themes: ${themes} | tone: ${s.tone}`;
   });
 
-  // Target solar-system count — scales sub-linearly with source count so
-  // we don't end up with 200 clusters of 5 items each.
-  const targetLo = Math.min(3, Math.max(1, Math.ceil(n / 20)));
-  const targetHi = Math.min(12, Math.max(targetLo + 1, Math.ceil(Math.sqrt(n))));
+  // Target range comes straight from the budget — no more ad-hoc
+  // sqrt-of-count math.
+  const targetLo = budget.solarSystems.min;
+  const targetHi = budget.solarSystems.max;
 
   const prompt = [
-    `You are designing a knowledge galaxy out of ${n} source documents.`,
+    `You are designing a knowledge galaxy out of ${n} source document(s).`,
     ``,
-    `Group them into ${targetLo}-${targetHi} thematic "solar systems". Each source must be assigned to exactly one solar system by its numeric index. Prefer fewer, broader systems over many narrow ones.`,
+    `Group them into ${targetLo}-${targetHi} thematic "solar systems". Each source must be assigned to exactly one solar system by its numeric index. Prefer fewer, broader systems over many narrow ones — match the scope to the input volume.`,
     ``,
     `Sources (numbered):`,
     lines.join("\n"),
@@ -109,12 +112,11 @@ export async function runClusterStage(ctx: PipelineContext): Promise<void> {
     schema: clusterSchema,
     jsonSchema: clusterJsonSchema,
     temperature: 0.5,
-    // Scale output budget with source count: ~3 tokens/index for the
-    // JSON array plus cluster metadata overhead. Clamp to 65k (Flash max).
-    maxOutputTokens: Math.min(65536, Math.max(8192, 2048 + n * 6)),
+    // Scale output budget with source count: ~6 tokens/index plus cluster
+    // overhead. Clamp to 65k (Flash max).
+    maxOutputTokens: Math.min(65536, Math.max(2048, 2048 + n * 6)),
   });
 
-  // Validate indices and build final clusters with UUIDs.
   const seen = new Set<number>();
   const cleanClusters: Array<{
     title: string;
@@ -125,8 +127,8 @@ export async function runClusterStage(ctx: PipelineContext): Promise<void> {
   for (const ss of result.solarSystems) {
     const sourceIds: string[] = [];
     for (const idx of ss.indices) {
-      if (idx < 0 || idx >= n) continue; // out of range — drop
-      if (seen.has(idx)) continue; // duplicate — drop (first assignment wins)
+      if (idx < 0 || idx >= n) continue;
+      if (seen.has(idx)) continue;
       seen.add(idx);
       sourceIds.push(ctx.sources[idx].id);
     }
@@ -139,7 +141,7 @@ export async function runClusterStage(ctx: PipelineContext): Promise<void> {
     }
   }
 
-  // Catch any sources the model forgot so we don't silently drop content.
+  // Safety net for sources the model forgot.
   const unplaced: string[] = [];
   for (let i = 0; i < n; i++) {
     if (!seen.has(i)) unplaced.push(ctx.sources[i].id);
@@ -165,7 +167,7 @@ export async function runClusterStage(ctx: PipelineContext): Promise<void> {
 // ── 2b. Outline per solar system ────────────────────────────────────
 
 const outlineSchema = z.object({
-  solarSystemBody: z.string().min(100),
+  solarSystemBody: z.string().min(40),
   planets: z
     .array(
       z.object({
@@ -175,7 +177,7 @@ const outlineSchema = z.object({
         planetConnections: z.array(z.string()).max(8),
       }),
     )
-    .min(3)
+    .min(1)
     .max(14),
   concepts: z
     .array(
@@ -186,7 +188,7 @@ const outlineSchema = z.object({
         conceptConnections: z.array(z.string()).max(8),
       }),
     )
-    .min(2)
+    .min(1)
     .max(10),
 });
 
@@ -197,14 +199,14 @@ const outlineJsonSchema = {
     solarSystemBody: {
       type: "string",
       description:
-        "A rich 2-4 paragraph description of the solar system as a whole. Describe its theme, mood, and scope. Not a summary — prose.",
+        "A description of the solar system as a whole — its theme, mood, and scope. Length matches the input volume, not a fixed target.",
     },
     planets: {
       type: "array",
-      minItems: 3,
+      minItems: 1,
       maxItems: 14,
       description:
-        "5-10 concrete knowledge planets. Each is a distinct tangible thing (a concept, technique, example, or entity) drawn from the sources.",
+        "Concrete knowledge planets. Each is a distinct tangible thing (a concept, technique, example, or entity) drawn from the sources.",
       items: {
         type: "object",
         required: ["title", "oneLineHook", "sourceIds", "planetConnections"],
@@ -215,23 +217,23 @@ const outlineJsonSchema = {
             type: "array",
             items: { type: "string" },
             minItems: 1,
-            description: "Which source ids (from the ones below) this planet draws from",
+            description: "Which source ids this planet draws from",
           },
           planetConnections: {
             type: "array",
             items: { type: "string" },
             description:
-              "Titles of other planets in THIS solar system that relate to this one. Must match another title in this outline exactly. 1-5 is typical.",
+              "Titles of other planets in THIS solar system that relate to this one. Must match another title in this outline exactly.",
           },
         },
       },
     },
     concepts: {
       type: "array",
-      minItems: 2,
+      minItems: 1,
       maxItems: 10,
       description:
-        "4-7 concepts — themes, techniques, people, patterns. Flexible nodes that connect planets and stories together.",
+        "Concepts — themes, techniques, people, patterns. Flexible nodes that connect planets and stories together.",
       items: {
         type: "object",
         required: ["title", "oneLineHook", "planetConnections", "conceptConnections"],
@@ -256,9 +258,10 @@ const outlineJsonSchema = {
 
 export async function runOutlineStage(
   ctx: PipelineContext,
-  concurrency = 3,
+  budget: InputBudget,
+  limiter: Limiter,
 ): Promise<void> {
-  await mapLimited(ctx.solarSystems, concurrency, async (ss) => {
+  await mapViaLimiter(ctx.solarSystems, limiter, async (ss) => {
     const assignedSources = ctx.sources.filter((s) => ss.sourceIds.includes(s.id));
     const digest = assignedSources
       .map(
@@ -276,7 +279,7 @@ export async function runOutlineStage(
       `Assigned source documents:`,
       digest,
       ``,
-      `Produce an outline of 5-10 concrete PLANETS (tangible knowledge nodes — a concept, a technique, a specific example, an entity) and 4-7 flexible CONCEPTS (themes, patterns, people, techniques). Also produce a 2-4 paragraph SOLAR SYSTEM BODY describing the system as a whole in rich prose.`,
+      `Produce an outline of ${budget.planetsPerSystem.min}-${budget.planetsPerSystem.max} concrete PLANETS (tangible knowledge nodes — a concept, a technique, a specific example, an entity) and ${budget.conceptsPerSystem.min}-${budget.conceptsPerSystem.max} flexible CONCEPTS (themes, patterns, people, techniques). Also produce a SOLAR SYSTEM BODY of ${budget.solarSystemBodyWords.min}-${budget.solarSystemBodyWords.max} words describing the system as a whole. Match the scope to how much source material you actually have — do not invent content to pad the counts.`,
       ``,
       `Rules:`,
       `- Planet titles should be specific and evocative. Not generic.`,
@@ -297,7 +300,6 @@ export async function runOutlineStage(
 
     ss.body = outline.solarSystemBody;
 
-    // Only allow sourceIds that belong to this system.
     const localSourceIds = new Set(ss.sourceIds);
 
     ss.planets = outline.planets.map<PlanetCtx>((p) => ({
@@ -316,8 +318,6 @@ export async function runOutlineStage(
       conceptConnectionTitles: c.conceptConnections,
     }));
 
-    // Prune self-references and unknown titles from connections, since
-    // those won't resolve to wikilinks later.
     const localPlanetTitles = new Set(ss.planets.map((p) => p.title));
     const localConceptTitles = new Set(ss.concepts.map((c) => c.title));
     for (const p of ss.planets) {
@@ -334,7 +334,6 @@ export async function runOutlineStage(
       );
     }
 
-    // Write (Solar System) file now that we have titles + body.
     writeSolarSystem(ctx.galaxyId, {
       id: ss.id,
       title: ss.title,
@@ -347,8 +346,10 @@ export async function runOutlineStage(
 
 // ── 2c. Expand each planet ──────────────────────────────────────────
 
+// Schema min lowered so tiny-tier planets (200-500 word bodies) pass
+// validation. The prompt still drives the target length per tier.
 const planetBodySchema = z.object({
-  body: z.string().min(800),
+  body: z.string().min(200),
 });
 
 const planetBodyJsonSchema = {
@@ -358,14 +359,15 @@ const planetBodyJsonSchema = {
     body: {
       type: "string",
       description:
-        "Rich, dense markdown prose for this planet. 1500-3000 words. Use paragraphs. Embed `[[(Planet) Name]]` and `[[(Concept) Name]]` wikilinks inline where natural — only use titles from the provided lists. Do not include a heading — that is added automatically.",
+        "Markdown prose for this planet. Length target is set in the prompt — match it to the actual source material, do not pad. Use paragraphs. Embed `[[(Planet) Name]]` and `[[(Concept) Name]]` wikilinks inline where natural — only use titles from the provided lists. Do not include a heading.",
     },
   },
 };
 
 export async function runExpandPlanetsStage(
   ctx: PipelineContext,
-  concurrency = 6,
+  budget: InputBudget,
+  limiter: Limiter,
 ): Promise<void> {
   const planetTitles = allPlanetTitles(ctx);
   const conceptTitles = allConceptTitles(ctx);
@@ -375,9 +377,11 @@ export async function runExpandPlanetsStage(
     for (const p of ss.planets) tasks.push({ ss, planet: p });
   }
 
-  const { failed } = await mapLimitedTolerant(
+  const planetOutputBudget = wordsToOutputTokens(budget.planetBodyWords.max);
+
+  const { failed } = await mapViaLimiterTolerant(
     tasks,
-    concurrency,
+    limiter,
     "expand-planet",
     async ({ ss, planet }) => {
       const assigned = ctx.sources.filter((s) => planet.sourceIds.includes(s.id));
@@ -398,7 +402,9 @@ export async function runExpandPlanetsStage(
         `Other planet titles you may wikilink to (only these): ${planetTitles.join(" | ")}`,
         `Concept titles you may wikilink to (only these): ${conceptTitles.join(" | ")}`,
         ``,
-        `Write a rich, dense markdown body for this planet. 1500-3000 words. Multiple paragraphs. Concrete details, examples, definitions, consequences. Inline \`[[(Planet) Other Title]]\` and \`[[(Concept) Name]]\` wikilinks where a reader would benefit from jumping — but only using titles from the lists above. Do NOT include a top-level heading (it is added when the file is written). Do not hedge. Do not add meta-commentary. Return structured JSON.`,
+        `TARGET LENGTH: ${budget.planetBodyWords.min}-${budget.planetBodyWords.max} words. This is the instruction — not a floor to pad toward. Match it to the source material above. If the source has only two paragraphs of content, your body should feel proportional, not inflated.`,
+        ``,
+        `Write a dense markdown body. Paragraphs. Concrete details, examples, definitions, consequences. Inline \`[[(Planet) Other Title]]\` and \`[[(Concept) Name]]\` wikilinks where a reader would benefit from jumping — but only using titles from the lists above. Do NOT include a top-level heading (it is added when the file is written). Do not hedge. Do not add meta-commentary. Return structured JSON.`,
       ].join("\n");
 
       const out = await generateJson({
@@ -407,7 +413,7 @@ export async function runExpandPlanetsStage(
         schema: planetBodySchema,
         jsonSchema: planetBodyJsonSchema,
         temperature: 0.85,
-        maxOutputTokens: 8192,
+        maxOutputTokens: planetOutputBudget,
       });
 
       planet.body = out.body;
@@ -423,8 +429,6 @@ export async function runExpandPlanetsStage(
     },
   );
 
-  // Drop planets that never got a body written so downstream stages
-  // don't try to reference them via wikilinks that won't resolve.
   for (const ss of ctx.solarSystems) {
     ss.planets = ss.planets.filter((p) => p.body !== undefined);
   }
@@ -436,7 +440,7 @@ export async function runExpandPlanetsStage(
 // ── 2d. Expand each concept ─────────────────────────────────────────
 
 const conceptBodySchema = z.object({
-  body: z.string().min(400),
+  body: z.string().min(150),
 });
 
 const conceptBodyJsonSchema = {
@@ -446,14 +450,15 @@ const conceptBodyJsonSchema = {
     body: {
       type: "string",
       description:
-        "Rich markdown body for this concept. 600-1500 words. Paragraphs. Inline `[[(Planet) Name]]` and `[[(Concept) Name]]` wikilinks using only titles from the provided lists. No top-level heading.",
+        "Markdown body for this concept. Length target set in the prompt. Paragraphs. Inline `[[(Planet) Name]]` and `[[(Concept) Name]]` wikilinks using only titles from the provided lists. No top-level heading.",
     },
   },
 };
 
 export async function runExpandConceptsStage(
   ctx: PipelineContext,
-  concurrency = 6,
+  budget: InputBudget,
+  limiter: Limiter,
 ): Promise<void> {
   const planetTitles = allPlanetTitles(ctx);
   const conceptTitles = allConceptTitles(ctx);
@@ -463,51 +468,58 @@ export async function runExpandConceptsStage(
     for (const c of ss.concepts) tasks.push({ ss, concept: c });
   }
 
-  const { failed } = await mapLimitedTolerant(tasks, concurrency, "expand-concept", async ({ ss, concept }) => {
-    // Give the concept access to its solar system's sources — broader
-    // context than a planet gets.
-    const digest = ctx.sources
-      .filter((s) => ss.sourceIds.includes(s.id))
-      .map((s) => `- ${s.title}: ${s.keyThemes.join(", ")}`)
-      .join("\n");
+  const conceptOutputBudget = wordsToOutputTokens(budget.conceptBodyWords.max);
 
-    const prompt = [
-      `You are writing the body of a CONCEPT in a knowledge galaxy.`,
-      ``,
-      `Concept title: "${concept.title}"`,
-      `Hook: "${concept.oneLineHook}"`,
-      `Inside solar system: "${ss.title}"`,
-      ``,
-      `Surrounding sources in this solar system:`,
-      digest,
-      ``,
-      `Planet titles you may wikilink to: ${planetTitles.join(" | ")}`,
-      `Concept titles you may wikilink to: ${conceptTitles.join(" | ")}`,
-      ``,
-      `Write a rich markdown body for this concept. 600-1500 words. Unlike a planet, a concept can be more thematic — explore why it matters, how it shows up across different planets, what makes it distinctive. Inline \`[[wikilinks]]\` using only titles from the lists above. No top-level heading.`,
-    ].join("\n");
+  const { failed } = await mapViaLimiterTolerant(
+    tasks,
+    limiter,
+    "expand-concept",
+    async ({ ss, concept }) => {
+      const digest = ctx.sources
+        .filter((s) => ss.sourceIds.includes(s.id))
+        .map((s) => `- ${s.title}: ${s.keyThemes.join(", ")}`)
+        .join("\n");
 
-    const out = await generateJson({
-      model: MODEL_PRO,
-      parts: [{ text: prompt }],
-      schema: conceptBodySchema,
-      jsonSchema: conceptBodyJsonSchema,
-      temperature: 0.85,
-      maxOutputTokens: 6144,
-    });
+      const prompt = [
+        `You are writing the body of a CONCEPT in a knowledge galaxy.`,
+        ``,
+        `Concept title: "${concept.title}"`,
+        `Hook: "${concept.oneLineHook}"`,
+        `Inside solar system: "${ss.title}"`,
+        ``,
+        `Surrounding sources in this solar system:`,
+        digest,
+        ``,
+        `Planet titles you may wikilink to: ${planetTitles.join(" | ")}`,
+        `Concept titles you may wikilink to: ${conceptTitles.join(" | ")}`,
+        ``,
+        `TARGET LENGTH: ${budget.conceptBodyWords.min}-${budget.conceptBodyWords.max} words. Match it to the source material — do not pad.`,
+        ``,
+        `Unlike a planet, a concept can be more thematic — explore why it matters, how it shows up across different planets, what makes it distinctive. Inline \`[[wikilinks]]\` using only titles from the lists above. No top-level heading.`,
+      ].join("\n");
 
-    concept.body = out.body;
+      const out = await generateJson({
+        model: MODEL_PRO,
+        parts: [{ text: prompt }],
+        schema: conceptBodySchema,
+        jsonSchema: conceptBodyJsonSchema,
+        temperature: 0.85,
+        maxOutputTokens: conceptOutputBudget,
+      });
 
-    writeConcept(ctx.galaxyId, {
-      id: concept.id,
-      title: concept.title,
-      planetConnections: concept.planetConnectionTitles,
-      conceptConnections: concept.conceptConnectionTitles,
-      body: concept.body,
-    });
+      concept.body = out.body;
 
-    return concept;
-  });
+      writeConcept(ctx.galaxyId, {
+        id: concept.id,
+        title: concept.title,
+        planetConnections: concept.planetConnectionTitles,
+        conceptConnections: concept.conceptConnectionTitles,
+        body: concept.body,
+      });
+
+      return concept;
+    },
+  );
 
   for (const ss of ctx.solarSystems) {
     ss.concepts = ss.concepts.filter((c) => c.body !== undefined);
